@@ -13,7 +13,8 @@ import {
   createUserProfile,
   getWritings,
   getSpeakingSubmissions,
-  getGlobalSettings
+  getGlobalSettings,
+  isAdminEmail
 } from "./firebase-utils";
 import { seedDatabaseIfNeeded } from "./seed";
 import { UserProfile, WritingSubmission, SpeakingSubmission } from "./types";
@@ -24,7 +25,9 @@ import LearningHub from "./components/LearningHub";
 import PracticeArena from "./components/PracticeArena";
 import CommunityDebate from "./components/CommunityDebate";
 import AdminPanel from "./components/AdminPanel";
+import TeacherPanel from "./components/TeacherPanel";
 import UserProfileProgress from "./components/UserProfileProgress";
+import { FoundersStoryModal } from "./components/FoundersStoryModal";
 import { ToastProvider, useToast } from "./components/Toast";
 
 import { LogIn, UserPlus, Globe, Loader2, Sparkles, AlertCircle, X } from "lucide-react";
@@ -62,6 +65,9 @@ function AppContent() {
 
   // Selected prompt launched from Learning Hub
   const [selectedPrompt, setSelectedPrompt] = useState<{ type: "writing" | "speaking"; text: string } | null>(null);
+
+  // Founders Story overlay state
+  const [showStoryModal, setShowStoryModal] = useState(false);
 
   // 1. Initial mounting and DB Seed + Logo Retrieval (Fully Non-Blocking)
   useEffect(() => {
@@ -118,7 +124,7 @@ function AppContent() {
           
           // Self-Healing Trigger: If authenticated but profile doc is missing in Firestore, heal it immediately
           if (!profile && authUser.email) {
-            const resolvedRole = authUser.email === "generaskagiraneza@gmail.com" ? "admin" : "student";
+            const resolvedRole = isAdminEmail(authUser.email) ? "admin" : "student";
             profile = await createUserProfile(
               authUser.uid,
               authUser.displayName || authUser.email.split("@")[0],
@@ -175,7 +181,7 @@ function AppContent() {
         }
 
         // Auto-assign admin role to the super admin email
-        const finalRole = authEmail.toLowerCase() === "generaskagiraneza@gmail.com" ? "admin" : authRole;
+        const finalRole = isAdminEmail(authEmail) ? "admin" : authRole;
 
         // Register User in Auth with 2-second safety timeout
         const authPromise = createUserWithEmailAndPassword(auth, authEmail, authPassword);
@@ -247,20 +253,26 @@ function AppContent() {
           console.warn("Firebase Sign In timed out or failed. Falling back to local offline profile login.", authErr);
           
           // Search local cache first, otherwise make instant local account
-          const mockUid = `demo_${authEmail.toLowerCase() === "generaskagiraneza@gmail.com" ? "admin" : "student"}_${authEmail.toLowerCase().replace(/[^a-z0-9]/g, "")}`;
+          const finalRole = isAdminEmail(authEmail) ? "admin" : authRole;
+          const mockUid = `demo_${finalRole}_${authEmail.toLowerCase().replace(/[^a-z0-9]/g, "")}`;
           const cachedProfile = localStorage.getItem(`fs_cache_user_${mockUid}`) || localStorage.getItem(`demo_profile_${mockUid}`);
           
           let profile: UserProfile;
           if (cachedProfile) {
             profile = JSON.parse(cachedProfile);
+            // If the role in cached profile differs from their selected login role, sync it to respect their active role
+            if (profile.role !== finalRole) {
+              profile.role = finalRole;
+              localStorage.setItem(`fs_cache_user_${mockUid}`, JSON.stringify(profile));
+              localStorage.setItem(`demo_profile_${mockUid}`, JSON.stringify(profile));
+            }
           } else {
-            const finalRole = authEmail.toLowerCase() === "generaskagiraneza@gmail.com" ? "admin" : "student";
             profile = {
               userId: mockUid,
               name: authEmail.split("@")[0].toUpperCase(),
               email: authEmail,
               role: finalRole,
-              school: "National Academy",
+              school: "ES Rubengera TSS",
               level: "Intermediate",
               xp: 250,
               streak: 3,
@@ -279,16 +291,16 @@ function AppContent() {
         }
         
         let profile = await getUserProfile(cred.user.uid);
-
+ 
         // Self-Healing Trigger during Email Sign In
         if (!profile && cred.user.email) {
-          const finalRole = cred.user.email.toLowerCase() === "generaskagiraneza@gmail.com" ? "admin" : "student";
+          const finalRole = isAdminEmail(cred.user.email) ? "admin" : authRole;
           profile = await createUserProfile(
             cred.user.uid,
             cred.user.displayName || cred.user.email.split("@")[0],
             cred.user.email,
             finalRole,
-            "National Academy"
+            "ES Rubengera TSS"
           );
         }
 
@@ -332,13 +344,13 @@ function AppContent() {
       let profile = await getUserProfile(cred.user.uid);
       if (!profile && cred.user.email) {
         // Auto-assign admin if their email matches super admin
-        const finalRole = cred.user.email.toLowerCase() === "generaskagiraneza@gmail.com" ? "admin" : "student";
+        const finalRole = isAdminEmail(cred.user.email) ? "admin" : "student";
         profile = await createUserProfile(
           cred.user.uid,
           cred.user.displayName || cred.user.email.split("@")[0],
           cred.user.email,
           finalRole,
-          "National Academy"
+          "ES Rubengera TSS"
         );
       }
       
@@ -427,6 +439,7 @@ function AppContent() {
           setAuthError("");
           setShowAuthDialog(true);
         }}
+        onOpenStory={() => setShowStoryModal(true)}
       />
 
       {/* Main Content Render area */}
@@ -444,6 +457,7 @@ function AppContent() {
               <CampaignLanding
                 onJoinCampaign={handleLaunchJoin}
                 user={userProfile}
+                onOpenStory={() => setShowStoryModal(true)}
               />
             )}
 
@@ -455,6 +469,7 @@ function AppContent() {
                   setIsSignUp(false);
                   setShowAuthDialog(true);
                 }}
+                onUserUpdate={setUserProfile}
               />
             )}
 
@@ -464,6 +479,7 @@ function AppContent() {
                   user={userProfile}
                   initialPromptText={selectedPrompt?.text || ""}
                   initialType={selectedPrompt?.type || "writing"}
+                  onUserUpdate={setUserProfile}
                 />
               ) : (
                 <div className="mx-auto max-w-md text-center py-24 px-4 space-y-4">
@@ -507,7 +523,7 @@ function AppContent() {
             )}
 
             {activeTab === "admin" && (
-              userProfile && (userProfile.role === "admin" || userProfile.role === "teacher") ? (
+              userProfile && userProfile.role === "admin" ? (
                 <AdminPanel
                   user={userProfile}
                   logoUrl={logoUrl}
@@ -520,12 +536,23 @@ function AppContent() {
               )
             )}
 
+            {activeTab === "teacher" && (
+              userProfile && userProfile.role === "teacher" ? (
+                <TeacherPanel user={userProfile} />
+              ) : (
+                <div className="text-center py-24 text-slate-500 font-bold">
+                  Unauthorized Access. Teacher rights required.
+                </div>
+              )
+            )}
+
             {activeTab === "profile" && (
               userProfile ? (
                 <UserProfileProgress
                   user={userProfile}
                   writings={profileWritings}
                   speakings={profileSpeakings}
+                  onUserUpdate={setUserProfile}
                 />
               ) : (
                 <div className="text-center py-24">Please authenticate to view your stats.</div>
@@ -582,7 +609,7 @@ function AppContent() {
             )}
 
             <form onSubmit={handleAuthSubmit} className="space-y-3.5">
-              {isSignUp && (
+              {isSignUp ? (
                 <>
                   <div>
                     <input
@@ -604,10 +631,11 @@ function AppContent() {
                     />
                   </div>
                   <div>
+                    <label className="block text-[11px] font-extrabold text-slate-400 uppercase tracking-wider mb-1">Select Account Type</label>
                     <select
                       value={authRole}
                       onChange={(e: any) => setAuthRole(e.target.value)}
-                      className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm outline-none bg-white focus:border-blue-500"
+                      className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm outline-none bg-white focus:border-blue-500 font-semibold"
                     >
                       <option value="student">Student Account</option>
                       <option value="teacher">Teacher Account</option>
@@ -615,6 +643,19 @@ function AppContent() {
                     </select>
                   </div>
                 </>
+              ) : (
+                <div>
+                  <label className="block text-[11px] font-extrabold text-slate-400 uppercase tracking-wider mb-1">Log In As</label>
+                  <select
+                    value={authRole}
+                    onChange={(e: any) => setAuthRole(e.target.value)}
+                    className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm outline-none bg-white focus:border-blue-500 font-semibold"
+                  >
+                    <option value="student">Student Account</option>
+                    <option value="teacher">Teacher Account</option>
+                    <option value="admin">Administrator Account</option>
+                  </select>
+                </div>
               )}
 
               <div>
@@ -729,6 +770,12 @@ function AppContent() {
           </div>
         </div>
       )}
+
+      {/* Founders Story Modal popup */}
+      <FoundersStoryModal
+        isOpen={showStoryModal}
+        onClose={() => setShowStoryModal(false)}
+      />
     </div>
   );
 }

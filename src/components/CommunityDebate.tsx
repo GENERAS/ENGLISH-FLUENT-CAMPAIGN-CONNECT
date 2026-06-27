@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from "react";
-import { MessageSquare, ThumbsUp, Vote, AlertTriangle, Users, BookOpen, Send, Sparkles, CheckCircle } from "lucide-react";
+import { MessageSquare, ThumbsUp, Vote, AlertTriangle, Users, BookOpen, Send, Sparkles, CheckCircle, Trophy } from "lucide-react";
 import { UserProfile, DebateTopic, Comment, WritingSubmission } from "../types";
-import { getDebates, castDebateVote, addComment, getComments, getWritings, toggleLike, submitReport } from "../firebase-utils";
+import { getDebates, castDebateVote, addComment, getComments, getWritings, toggleLike, submitReport, subscribeToDebates, subscribeToComments } from "../firebase-utils";
 import { useToast } from "./Toast";
+import { GlobalRankings } from "./GlobalRankings";
 
 
 interface CommunityDebateProps {
@@ -17,7 +18,7 @@ export const CommunityDebate: React.FC<CommunityDebateProps> = ({ user }) => {
   const [debateComments, setDebateComments] = useState<Comment[]>([]);
   const [newComment, setNewComment] = useState("");
   const [commentSide, setCommentSide] = useState<"for" | "against" | "neutral">("neutral");
-  const [activeTab, setActiveTab] = useState<"debates" | "peer_essays">("debates");
+  const [activeTab, setActiveTab] = useState<"debates" | "peer_essays" | "rankings">("debates");
 
   // Peer writings
   const [peerWritings, setPeerWritings] = useState<WritingSubmission[]>([]);
@@ -31,22 +32,39 @@ export const CommunityDebate: React.FC<CommunityDebateProps> = ({ user }) => {
   const [reportedSuccessfully, setReportedSuccessfully] = useState(false);
 
   useEffect(() => {
-    loadDebates();
     loadPeerWritings();
+
+    // Live Sync debates from Firestore
+    const unsubscribe = subscribeToDebates((list) => {
+      setDebates(list);
+      setSelectedDebate((current) => {
+        if (!current && list.length > 0) {
+          return list[0];
+        }
+        if (current) {
+          const updated = list.find((d) => d.id === current.id);
+          return updated || current;
+        }
+        return null;
+      });
+    });
+
+    return () => unsubscribe();
   }, []);
 
-  const loadDebates = async () => {
-    try {
-      const list = await getDebates();
-      setDebates(list);
-      if (list.length > 0) {
-        setSelectedDebate(list[0]);
-        loadDebateComments(list[0].id);
-      }
-    } catch (err) {
-      console.error("Failed to load debates:", err);
+  // Live Sync comments on the selected debate
+  useEffect(() => {
+    if (!selectedDebate?.id) {
+      setDebateComments([]);
+      return;
     }
-  };
+
+    const unsubscribe = subscribeToComments(selectedDebate.id, (comments) => {
+      setDebateComments(comments);
+    });
+
+    return () => unsubscribe();
+  }, [selectedDebate?.id]);
 
   const loadPeerWritings = async () => {
     try {
@@ -54,15 +72,6 @@ export const CommunityDebate: React.FC<CommunityDebateProps> = ({ user }) => {
       setPeerWritings(list);
     } catch (err) {
       console.error("Failed to load peer writings:", err);
-    }
-  };
-
-  const loadDebateComments = async (debateId: string) => {
-    try {
-      const list = await getComments(debateId);
-      setDebateComments(list);
-    } catch (err) {
-      console.error("Failed to load debate comments:", err);
     }
   };
 
@@ -78,12 +87,6 @@ export const CommunityDebate: React.FC<CommunityDebateProps> = ({ user }) => {
   const handleVote = async (debateId: string, side: "for" | "against") => {
     try {
       await castDebateVote(debateId, user.userId, side);
-      await loadDebates();
-      // Keep selected debate reference updated with new votes
-      const updated = debates.find((d) => d.id === debateId);
-      if (updated) {
-        setSelectedDebate(updated);
-      }
       showToast(`Vote casted: ${side === "for" ? "In Favor" : "Against"}`, "success");
     } catch (err) {
       console.error("Error casting vote:", err);
@@ -105,7 +108,6 @@ export const CommunityDebate: React.FC<CommunityDebateProps> = ({ user }) => {
         commentSide
       );
       setNewComment("");
-      loadDebateComments(selectedDebate.id);
       showToast("Your debate argument has been posted!", "success");
     } catch (err) {
       console.error("Error posting debate comment:", err);
@@ -190,10 +192,10 @@ export const CommunityDebate: React.FC<CommunityDebateProps> = ({ user }) => {
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
       {/* Tab Switcher */}
-      <div className="flex border-b border-slate-200 mb-8">
+      <div className="flex border-b border-slate-200 mb-8 overflow-x-auto scrollbar-none">
         <button
           onClick={() => setActiveTab("debates")}
-          className={`flex items-center gap-2 px-6 py-3.5 text-sm font-bold border-b-2 transition-all cursor-pointer ${
+          className={`flex items-center gap-2 px-6 py-3.5 text-sm font-bold border-b-2 transition-all shrink-0 cursor-pointer ${
             activeTab === "debates"
               ? "border-blue-600 text-blue-600"
               : "border-transparent text-slate-500 hover:text-slate-800"
@@ -204,7 +206,7 @@ export const CommunityDebate: React.FC<CommunityDebateProps> = ({ user }) => {
         </button>
         <button
           onClick={() => setActiveTab("peer_essays")}
-          className={`flex items-center gap-2 px-6 py-3.5 text-sm font-bold border-b-2 transition-all cursor-pointer ${
+          className={`flex items-center gap-2 px-6 py-3.5 text-sm font-bold border-b-2 transition-all shrink-0 cursor-pointer ${
             activeTab === "peer_essays"
               ? "border-blue-600 text-blue-600"
               : "border-transparent text-slate-500 hover:text-slate-800"
@@ -213,9 +215,20 @@ export const CommunityDebate: React.FC<CommunityDebateProps> = ({ user }) => {
           <BookOpen className="h-4.5 w-4.5" />
           <span>Peer Reviewed Submissions</span>
         </button>
+        <button
+          onClick={() => setActiveTab("rankings")}
+          className={`flex items-center gap-2 px-6 py-3.5 text-sm font-bold border-b-2 transition-all shrink-0 cursor-pointer ${
+            activeTab === "rankings"
+              ? "border-blue-600 text-blue-600"
+              : "border-transparent text-slate-500 hover:text-slate-800"
+          }`}
+        >
+          <Trophy className="h-4.5 w-4.5 text-amber-500" />
+          <span>Global Rankings</span>
+        </button>
       </div>
 
-      {activeTab === "debates" ? (
+      {activeTab === "debates" && (
         /* Debates Portal */
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
           {/* Debates Sidebar */}
@@ -228,7 +241,6 @@ export const CommunityDebate: React.FC<CommunityDebateProps> = ({ user }) => {
                     key={d.id}
                     onClick={() => {
                       setSelectedDebate(d);
-                      loadDebateComments(d.id);
                     }}
                     className={`w-full text-left rounded-xl p-3 border transition-all flex flex-col gap-1 cursor-pointer ${
                       selectedDebate?.id === d.id
@@ -414,7 +426,9 @@ export const CommunityDebate: React.FC<CommunityDebateProps> = ({ user }) => {
             )}
           </div>
         </div>
-      ) : (
+      )}
+
+      {activeTab === "peer_essays" && (
         /* Peer Essays Gallery */
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
           <div className="lg:col-span-4 space-y-4">
@@ -568,6 +582,10 @@ export const CommunityDebate: React.FC<CommunityDebateProps> = ({ user }) => {
             )}
           </div>
         </div>
+      )}
+
+      {activeTab === "rankings" && (
+        <GlobalRankings user={user} />
       )}
 
       {/* Flag Moderation Dialog */}

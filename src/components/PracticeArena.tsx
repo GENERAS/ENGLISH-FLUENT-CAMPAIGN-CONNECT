@@ -13,10 +13,11 @@ import {
   Sparkles,
   BookOpen,
   Info,
-  ChevronDown
+  ChevronDown,
+  Upload
 } from "lucide-react";
 import { UserProfile, WritingSubmission, SpeakingSubmission } from "../types";
-import { submitWriting, getWritings, submitSpeaking, getSpeakingSubmissions } from "../firebase-utils";
+import { submitWriting, getWritings, submitSpeaking, getSpeakingSubmissions, uploadAudio, completeDailyTask } from "../firebase-utils";
 import { useToast } from "./Toast";
 
 
@@ -24,12 +25,14 @@ interface PracticeArenaProps {
   user: UserProfile;
   initialPromptText?: string;
   initialType?: "writing" | "speaking";
+  onUserUpdate?: (updatedProfile: UserProfile) => void;
 }
 
 export const PracticeArena: React.FC<PracticeArenaProps> = ({
   user,
   initialPromptText = "",
-  initialType = "writing"
+  initialType = "writing",
+  onUserUpdate
 }) => {
   const [activeSubTab, setActiveSubTab] = useState<"writing" | "speaking">(initialType);
   const { showToast } = useToast();
@@ -53,6 +56,7 @@ export const PracticeArena: React.FC<PracticeArenaProps> = ({
   const [speakSuccess, setSpeakSuccess] = useState(false);
   const [micPermissionError, setMicPermissionError] = useState(false);
   const [pastSpeakings, setPastSpeakings] = useState<SpeakingSubmission[]>([]);
+  const [speakMethod, setSpeakMethod] = useState<"record" | "upload">("record");
 
   // Audio elements
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -62,6 +66,20 @@ export const PracticeArena: React.FC<PracticeArenaProps> = ({
   useEffect(() => {
     loadSubmissions();
   }, [user.userId]);
+
+  // Sync initial props to state when they change
+  useEffect(() => {
+    if (initialType) {
+      setActiveSubTab(initialType);
+    }
+    if (initialPromptText) {
+      if (initialType === "writing") {
+        setWriteContent(`Responding to prompt: ${initialPromptText}\n\n`);
+      } else {
+        setSpeakingPrompt(initialPromptText);
+      }
+    }
+  }, [initialPromptText, initialType]);
 
   const loadSubmissions = async () => {
     try {
@@ -92,10 +110,20 @@ export const PracticeArena: React.FC<PracticeArenaProps> = ({
       setWriteContent("");
       loadSubmissions();
       showToast("Writing submission uploaded successfully!", "success");
+      
+      try {
+        const updatedProfile = await completeDailyTask(user.userId, "writing");
+        if (onUserUpdate) {
+          onUserUpdate(updatedProfile);
+        }
+      } catch (err) {
+        console.warn("Streak completeDailyTask write failed", err);
+      }
+
       setTimeout(() => setWriteSuccess(false), 4000);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Error submitting essay:", err);
-      showToast("Failed to upload writing submission.", "error");
+      showToast(err.message || "Failed to upload writing submission.", "error");
     } finally {
       setIsSubmittingWrite(false);
     }
@@ -107,7 +135,15 @@ export const PracticeArena: React.FC<PracticeArenaProps> = ({
     audioChunksRef.current = [];
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream);
+      
+      let mediaRecorder: MediaRecorder;
+      // Use 16kbps for highly efficient compression, saving bandwidth and fitting base64 limits
+      try {
+        mediaRecorder = new MediaRecorder(stream, { audioBitsPerSecond: 16000 });
+      } catch (e) {
+        console.warn("Failed to create MediaRecorder with custom options, falling back to default constructor", e);
+        mediaRecorder = new MediaRecorder(stream);
+      }
       mediaRecorderRef.current = mediaRecorder;
 
       mediaRecorder.ondataavailable = (event) => {
@@ -167,13 +203,47 @@ export const PracticeArena: React.FC<PracticeArenaProps> = ({
     }
   };
 
+  const handleAudioFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Check if it is an audio file
+    if (!file.type.startsWith("audio/")) {
+      showToast("Selected file must be an audio file (e.g. .mp3, .wav, .m4a, .ogg).", "error");
+      return;
+    }
+
+    // Limit to 15MB to prevent memory/Firestore limitations
+    if (file.size > 15 * 1024 * 1024) {
+      showToast("Audio file size is too large (max 15MB).", "error");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onloadend = () => {
+      const base64data = reader.result as string;
+      setAudioUrl(base64data);
+      setAudioBlob(file);
+      showToast(`Audio "${file.name}" loaded successfully! You can now review and submit.`, "success");
+    };
+  };
+
   const handleSpeakSubmit = async () => {
     if (!audioUrl) return;
     setIsSubmittingSpeak(true);
     try {
+      let finalAudioUrl = audioUrl;
+      
+      // If we have an actual recording or uploaded file blob
+      if (audioBlob && audioBlob.size > 0) {
+        showToast("Uploading audio file...", "info");
+        finalAudioUrl = await uploadAudio(audioBlob, user.userId);
+      }
+
       await submitSpeaking(
         speakingPrompt,
-        audioUrl,
+        finalAudioUrl,
         user.userId,
         user.name
       );
@@ -182,10 +252,20 @@ export const PracticeArena: React.FC<PracticeArenaProps> = ({
       setAudioBlob(null);
       loadSubmissions();
       showToast("Speaking submission uploaded successfully!", "success");
+      
+      try {
+        const updatedProfile = await completeDailyTask(user.userId, "speaking");
+        if (onUserUpdate) {
+          onUserUpdate(updatedProfile);
+        }
+      } catch (err) {
+        console.warn("Streak completeDailyTask speaking failed", err);
+      }
+
       setTimeout(() => setSpeakSuccess(false), 4000);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Error submitting speaking:", err);
-      showToast("Failed to upload speaking submission.", "error");
+      showToast(err.message || "Failed to upload speaking submission.", "error");
     } finally {
       setIsSubmittingSpeak(false);
     }
@@ -339,58 +419,128 @@ export const PracticeArena: React.FC<PracticeArenaProps> = ({
                   />
                 </div>
 
-                {/* Microphone Sandbox Indicator */}
-                {micPermissionError && (
-                  <div className="rounded-xl bg-amber-50 border border-amber-200 p-3.5 flex items-start gap-2.5">
-                    <Info className="h-4.5 w-4.5 text-amber-600 shrink-0 mt-0.5" />
-                    <div className="text-[11px] text-amber-800 leading-relaxed">
-                      <strong>Sandbox Fallback Active:</strong> Browser microphone access is unavailable inside this sandboxed container. 
-                      We've automatically enabled our <em>Fluency Demonstrator Track</em> so you can submit and experience the full assessment and grading workflow.
+                {/* Method Selection Switcher */}
+                <div className="grid grid-cols-2 gap-2 bg-slate-50 p-1 rounded-xl border border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSpeakMethod("record");
+                      setAudioUrl(null);
+                      setAudioBlob(null);
+                    }}
+                    className={`py-2 px-3 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                      speakMethod === "record"
+                        ? "bg-white text-blue-600 shadow-sm border border-slate-200/50"
+                        : "text-slate-500 hover:text-slate-800"
+                    }`}
+                  >
+                    <Mic className="h-4 w-4" />
+                    <span>Option A: Record Live Voice</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSpeakMethod("upload");
+                      setAudioUrl(null);
+                      setAudioBlob(null);
+                    }}
+                    className={`py-2 px-3 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                      speakMethod === "upload"
+                        ? "bg-white text-blue-600 shadow-sm border border-slate-200/50"
+                        : "text-slate-500 hover:text-slate-800"
+                    }`}
+                  >
+                    <Upload className="h-4 w-4" />
+                    <span>Option B: Upload Audio File</span>
+                  </button>
+                </div>
+
+                {speakMethod === "record" ? (
+                  <>
+                    {/* Microphone Sandbox Indicator */}
+                    {micPermissionError && (
+                      <div className="rounded-xl bg-amber-50 border border-amber-200 p-3.5 flex items-start gap-2.5">
+                        <Info className="h-4.5 w-4.5 text-amber-600 shrink-0 mt-0.5" />
+                        <div className="text-[11px] text-amber-800 leading-relaxed">
+                          <strong>Sandbox Fallback Active:</strong> Browser microphone access is unavailable inside this sandboxed container. 
+                          We've automatically enabled our <em>Fluency Demonstrator Track</em> so you can submit and experience the full assessment and grading workflow.
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Recorder Console UI */}
+                    <div className="flex flex-col items-center justify-center py-8 bg-slate-50 rounded-2xl border border-slate-100/80 space-y-4 relative overflow-hidden">
+                      {/* Wave Visualizer Effect */}
+                      {isRecording && (
+                        <div className="absolute inset-0 bg-blue-500/5 flex items-center justify-center gap-1.5 opacity-40">
+                          {[1, 2, 3, 4, 5, 4, 3, 2, 1, 3, 5, 6, 4, 2, 5, 2].map((h, i) => (
+                            <div
+                              key={i}
+                              style={{ height: `${h * 6}px` }}
+                              className="w-1 bg-blue-600 rounded-full animate-bounce"
+                            />
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="text-3xl font-mono font-extrabold text-slate-800">
+                        {formatDuration(recordingDuration)}
+                      </div>
+
+                      <div className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                        {isRecording ? "Recording Live Mic Audio" : "Voice Recorder Ready"}
+                      </div>
+
+                      <div className="flex gap-4 z-10">
+                        {!isRecording ? (
+                          <button
+                            type="button"
+                            onClick={startRecording}
+                            className="h-14 w-14 rounded-full bg-blue-600 text-white flex items-center justify-center shadow-lg hover:bg-blue-500 active:scale-95 transition cursor-pointer"
+                          >
+                            <Mic className="h-6 w-6" />
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={stopRecording}
+                            className="h-14 w-14 rounded-full bg-rose-600 text-white flex items-center justify-center shadow-lg hover:bg-rose-500 active:scale-95 transition cursor-pointer"
+                          >
+                            <Square className="h-5 w-5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  /* Audio File Uploader Box */
+                  <div className="flex flex-col items-center justify-center py-10 bg-slate-50 rounded-2xl border border-dashed border-slate-200 p-6 text-center space-y-4 hover:bg-blue-50/5 hover:border-blue-400 transition">
+                    <div className="h-12 w-12 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center">
+                      <Upload className="h-6 w-6" />
+                    </div>
+                    <div>
+                      <h3 className="text-xs font-bold text-slate-800">Choose an Audio File</h3>
+                      <p className="text-[11px] text-slate-400 mt-1 max-w-sm mx-auto leading-relaxed">
+                        Drag and drop or select a pre-recorded audio file (.mp3, .wav, .m4a, .webm, etc.) from your device to upload and submit.
+                      </p>
+                    </div>
+                    <div>
+                      <input
+                        type="file"
+                        accept="audio/*"
+                        id="audio-file-selector"
+                        className="hidden"
+                        onChange={handleAudioFileChange}
+                      />
+                      <label
+                        htmlFor="audio-file-selector"
+                        className="inline-flex items-center gap-2 rounded-xl bg-blue-600 hover:bg-blue-500 px-5 py-2.5 text-xs font-bold text-white shadow-md shadow-blue-100 transition active:scale-95 cursor-pointer"
+                      >
+                        Select Audio File
+                      </label>
                     </div>
                   </div>
                 )}
-
-                {/* Recorder Console UI */}
-                <div className="flex flex-col items-center justify-center py-8 bg-slate-50 rounded-2xl border border-slate-100/80 space-y-4 relative overflow-hidden">
-                  {/* Wave Visualizer Effect */}
-                  {isRecording && (
-                    <div className="absolute inset-0 bg-blue-500/5 flex items-center justify-center gap-1.5 opacity-40">
-                      {[1, 2, 3, 4, 5, 4, 3, 2, 1, 3, 5, 6, 4, 2, 5, 2].map((h, i) => (
-                        <div
-                          key={i}
-                          style={{ height: `${h * 6}px` }}
-                          className="w-1 bg-blue-600 rounded-full animate-bounce"
-                        />
-                      ))}
-                    </div>
-                  )}
-
-                  <div className="text-3xl font-mono font-extrabold text-slate-800">
-                    {formatDuration(recordingDuration)}
-                  </div>
-
-                  <div className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                    {isRecording ? "Recording Live Mic Audio" : "Voice Recorder Ready"}
-                  </div>
-
-                  <div className="flex gap-4 z-10">
-                    {!isRecording ? (
-                      <button
-                        onClick={startRecording}
-                        className="h-14 w-14 rounded-full bg-blue-600 text-white flex items-center justify-center shadow-lg hover:bg-blue-500 active:scale-95 transition cursor-pointer"
-                      >
-                        <Mic className="h-6 w-6" />
-                      </button>
-                    ) : (
-                      <button
-                        onClick={stopRecording}
-                        className="h-14 w-14 rounded-full bg-rose-600 text-white flex items-center justify-center shadow-lg hover:bg-rose-500 active:scale-95 transition cursor-pointer"
-                      >
-                        <Square className="h-5 w-5" />
-                      </button>
-                    )}
-                  </div>
-                </div>
 
                 {/* Player console after recording */}
                 {audioUrl && (

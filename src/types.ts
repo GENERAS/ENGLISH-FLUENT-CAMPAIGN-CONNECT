@@ -19,6 +19,30 @@ export interface UserProfile {
   streak: number;
   createdAt: string;
   badges: string[];
+  imageUrl?: string;
+  lastActiveDate?: string;
+  lastStreakUpdateDate?: string;
+  dailyTasksCompleted?: {
+    speaking?: boolean;
+    writing?: boolean;
+    vocabulary?: boolean;
+  };
+  weeklySpotlight?: boolean;
+  spotlightReason?: string;
+  spotlightWeek?: string;
+  studyGoals?: {
+    joinedDebate?: boolean;
+    submittedEssay?: boolean;
+    reachedTargetXp?: boolean;
+    targetXpEarned?: number;
+    claimDate?: string;
+  };
+  notificationSettings?: {
+    emailDebate?: boolean;
+    emailFeedback?: boolean;
+    pushReplies?: boolean;
+  };
+  xpHistory?: { [dateStr: string]: number };
 }
 
 export interface WritingScore {
@@ -81,6 +105,21 @@ export interface Lesson {
   contentBody: string;
   resources?: string[];
   createdAt: string;
+  status?: "pending" | "approved";
+  createdBy?: string;
+  createdByTeacherName?: string;
+  weeklyScheduleDate?: string;
+}
+
+export interface LessonTracking {
+  id: string; // userId_lessonId
+  userId: string;
+  userName: string;
+  lessonId: string;
+  lessonTitle: string;
+  status: "enrolled" | "completed";
+  enrolledAt: string;
+  completedAt?: string;
 }
 
 export interface DebateTopic {
@@ -127,3 +166,15 @@ export interface Badge {
   color: string;
   criteria: string;
 }
+
+export interface Founder {
+  id: string;
+  name: string;
+  role: string;
+  bio: string;
+  school: string;
+  imageUrl?: string;
+  displayOrder: number;
+  createdAt?: string;
+}
+

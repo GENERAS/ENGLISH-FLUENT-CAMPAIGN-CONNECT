@@ -1,0 +1,23 @@
+{
+  "short_name": "EFC Rwanda",
+  "name": "English Fluency Campaign Rwanda",
+  "description": "Student-led English fluency campaign, public debates, and interactive practice arena in Rwanda.",
+  "id": "/",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F8FAFC",
+  "theme_color": "#0B53C3",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "https://img.icons8.com/color/192/000000/globe.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "https://img.icons8.com/color/512/000000/globe.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ]
+}

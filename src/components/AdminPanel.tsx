@@ -18,7 +18,9 @@ import {
   UserProfile,
   WritingSubmission,
   SpeakingSubmission,
-  Report
+  Report,
+  Founder,
+  Lesson
 } from "../types";
 import {
   getAllUsers,
@@ -30,7 +32,16 @@ import {
   resolveReport,
   createLesson,
   updateUserRole,
-  updateGlobalSettings
+  updateUserProfileDetails,
+  updateGlobalSettings,
+  getFounders,
+  createFounder,
+  updateFounder,
+  deleteFounder,
+  uploadImageToCloudinary,
+  isAdminEmail,
+  getLessons,
+  approveLesson
 } from "../firebase-utils";
 import { useToast } from "./Toast";
 
@@ -45,7 +56,7 @@ interface AdminPanelProps {
 }
 
 export const AdminPanel: React.FC<AdminPanelProps> = ({ user, logoUrl = "", onLogoChange }) => {
-  const [activeTab, setActiveTab] = useState<"submissions" | "users" | "moderation" | "lessons" | "analytics" | "branding">("submissions");
+  const [activeTab, setActiveTab] = useState<"submissions" | "users" | "moderation" | "lessons" | "analytics" | "branding" | "founders">("submissions");
   const { showToast } = useToast();
 
   // Branding logo upload states
@@ -53,6 +64,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ user, logoUrl = "", onLo
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [logoPreviewUrl, setLogoPreviewUrl] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [cloudinaryPreset, setCloudinaryPreset] = useState<string>(
+    localStorage.getItem("cloudinary_upload_preset") || "ml_default"
+  );
+  const [cloudinaryCloudName, setCloudinaryCloudName] = useState<string>(
+    localStorage.getItem("cloudinary_cloud_name") || "dzllg8zxm"
+  );
+  const [cloudinaryApiKey, setCloudinaryApiKey] = useState<string>(
+    localStorage.getItem("cloudinary_api_key") || "375193569628911"
+  );
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   const handleFileSelect = (file: File) => {
@@ -73,25 +93,18 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ user, logoUrl = "", onLo
     if (!selectedFile) return;
     setIsUploading(true);
     try {
-      const formData = new FormData();
-      formData.append("image", selectedFile);
-      const res = await fetch("https://api.imgbb.com/1/upload?key=199b956cd12ea8527e5aa4df90aa4ee9", {
-        method: "POST",
-        body: formData
-      });
-      if (!res.ok) throw new Error("Failed to upload to ImgBB");
-      const result = await res.json();
-      const url = result.data.url;
+      // Use the Cloudinary upload function!
+      const url = await uploadImageToCloudinary(selectedFile, cloudinaryPreset);
       
       await updateGlobalSettings({ logoUrl: url });
       if (onLogoChange) onLogoChange(url);
       
-      showToast("Website logo updated successfully!", "success");
+      showToast("Website logo updated successfully using Cloudinary!", "success");
       setSelectedFile(null);
       setLogoPreviewUrl(null);
     } catch (err: any) {
       console.error("Upload logo failed:", err);
-      showToast("Failed to upload website logo.", "error");
+      showToast("Failed to upload website logo to Cloudinary.", "error");
     } finally {
       setIsUploading(false);
     }
@@ -139,6 +152,27 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ user, logoUrl = "", onLo
   const [lessonBody, setLessonBody] = useState("");
   const [lessonResources, setLessonResources] = useState("");
   const [lessonSuccess, setLessonSuccess] = useState(false);
+  const [adminLessons, setAdminLessons] = useState<Lesson[]>([]);
+  const [isApprovingLesson, setIsApprovingLesson] = useState<string | null>(null);
+
+  // Founders & Developers State
+  const [foundersList, setFoundersList] = useState<Founder[]>([]);
+  const [isLoadingFounders, setIsLoadingFounders] = useState(false);
+  const [selectedFounder, setSelectedFounder] = useState<Founder | null>(null);
+  const [founderName, setFounderName] = useState("");
+  const [founderRole, setFounderRole] = useState("");
+  const [founderSchool, setFounderSchool] = useState("");
+  const [founderBio, setFounderBio] = useState("");
+  const [founderImageUrl, setFounderImageUrl] = useState("");
+  const [founderDisplayOrder, setFounderDisplayOrder] = useState(1);
+  const [isSubmittingFounder, setIsSubmittingFounder] = useState(false);
+  const [isUploadingFounderPhoto, setIsUploadingFounderPhoto] = useState(false);
+
+  // Weekly Spotlight States
+  const [spotlightUser, setSpotlightUser] = useState<UserProfile | null>(null);
+  const [spotlightReasonText, setSpotlightReasonText] = useState("");
+  const [spotlightWeekText, setSpotlightWeekText] = useState("");
+  const [isSubmittingSpotlight, setIsSubmittingSpotlight] = useState(false);
 
   useEffect(() => {
     loadAdminData();
@@ -157,9 +191,36 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ user, logoUrl = "", onLo
       } else if (activeTab === "moderation") {
         const reports = await getReports();
         setReportsList(reports);
+      } else if (activeTab === "founders") {
+        setIsLoadingFounders(true);
+        const list = await getFounders();
+        setFoundersList(list);
+        setIsLoadingFounders(false);
+      } else if (activeTab === "lessons") {
+        const list = await getLessons();
+        setAdminLessons(list);
       }
     } catch (err) {
       console.error("Error loading admin information:", err);
+      if (activeTab === "founders") {
+        setIsLoadingFounders(false);
+      }
+    }
+  };
+
+  const handleApproveLesson = async (lessonId: string) => {
+    setIsApprovingLesson(lessonId);
+    try {
+      await approveLesson(lessonId);
+      showToast("Teacher lesson successfully verified & approved!", "success");
+      setAdminLessons((prev) =>
+        prev.map((l) => (l.id === lessonId ? { ...l, status: "approved" } : l))
+      );
+    } catch (err) {
+      console.error("Failed to approve lesson:", err);
+      showToast("Failed to verify/approve lesson.", "error");
+    } finally {
+      setIsApprovingLesson(null);
     }
   };
 
@@ -173,6 +234,57 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ user, logoUrl = "", onLo
     } catch (err) {
       console.error("Failed to update user role:", err);
       showToast("Failed to update user role.", "error");
+    }
+  };
+
+  const handleSaveSpotlight = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!spotlightUser) return;
+    if (!spotlightReasonText.trim()) {
+      showToast("Please provide a spotlight commendation reason.", "error");
+      return;
+    }
+    setIsSubmittingSpotlight(true);
+    try {
+      const updates = {
+        weeklySpotlight: true,
+        spotlightReason: spotlightReasonText.trim(),
+        spotlightWeek: spotlightWeekText.trim() || `Week of ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+      };
+      await updateUserProfileDetails(spotlightUser.userId, updates);
+      setUsersList((prev) =>
+        prev.map((u) => (u.userId === spotlightUser.userId ? { ...u, ...updates } : u))
+      );
+      showToast(`${spotlightUser.name} has been promoted to Weekly Student Spotlight! 🌟`, "success");
+      setSpotlightUser(null);
+      setSpotlightReasonText("");
+      setSpotlightWeekText("");
+    } catch (err) {
+      console.error("Failed to pin student spotlight:", err);
+      showToast("Failed to promote student to spotlight.", "error");
+    } finally {
+      setIsSubmittingSpotlight(false);
+    }
+  };
+
+  const handleRemoveSpotlight = async (userId: string, userName: string) => {
+    try {
+      const updates = {
+        weeklySpotlight: false,
+        spotlightReason: "",
+        spotlightWeek: ""
+      };
+      await updateUserProfileDetails(userId, updates);
+      setUsersList((prev) =>
+        prev.map((u) => (u.userId === userId ? { ...u, ...updates } : u))
+      );
+      showToast(`Removed ${userName} from Student Spotlight.`, "info");
+      if (spotlightUser?.userId === userId) {
+        setSpotlightUser(null);
+      }
+    } catch (err) {
+      console.error("Failed to remove student spotlight:", err);
+      showToast("Failed to remove spotlight.", "error");
     }
   };
 
@@ -269,6 +381,91 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ user, logoUrl = "", onLo
     }
   };
 
+  // Submit Founder Form (Add or Edit)
+  const handleSubmitFounder = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!founderName || !founderRole || !founderSchool || !founderBio) {
+      showToast("Please fill in all required founder fields.", "error");
+      return;
+    }
+    
+    setIsSubmittingFounder(true);
+    try {
+      const founderData = {
+        name: founderName.trim(),
+        role: founderRole.trim(),
+        school: founderSchool.trim(),
+        bio: founderBio.trim(),
+        imageUrl: founderImageUrl.trim() || undefined,
+        displayOrder: Number(founderDisplayOrder) || 1
+      };
+
+      if (selectedFounder) {
+        // Edit Mode
+        await updateFounder(selectedFounder.id, founderData);
+        showToast("Founder updated successfully!", "success");
+      } else {
+        // Create Mode
+        await createFounder(founderData);
+        showToast("New Founder added successfully!", "success");
+      }
+
+      // Reset Form
+      setFounderName("");
+      setFounderRole("");
+      setFounderSchool("");
+      setFounderBio("");
+      setFounderImageUrl("");
+      setFounderDisplayOrder(foundersList.length + 2);
+      setSelectedFounder(null);
+      
+      // Reload Data
+      loadAdminData();
+    } catch (err) {
+      console.error("Failed to submit founder:", err);
+      showToast("Failed to submit founder.", "error");
+    } finally {
+      setIsSubmittingFounder(false);
+    }
+  };
+
+  // Delete Founder
+  const handleDeleteFounder = async (id: string) => {
+    if (!window.confirm("Are you sure you want to remove this founder/developer? This action cannot be undone.")) {
+      return;
+    }
+    try {
+      await deleteFounder(id);
+      showToast("Founder successfully removed.", "success");
+      loadAdminData();
+    } catch (err) {
+      console.error("Failed to delete founder:", err);
+      showToast("Failed to delete founder.", "error");
+    }
+  };
+
+  // Select Founder for Editing
+  const handleEditFounderSelect = (founder: Founder) => {
+    setSelectedFounder(founder);
+    setFounderName(founder.name);
+    setFounderRole(founder.role);
+    setFounderSchool(founder.school);
+    setFounderBio(founder.bio);
+    setFounderImageUrl(founder.imageUrl || "");
+    setFounderDisplayOrder(founder.displayOrder);
+  };
+
+  // Cancel edit mode
+  const handleCancelFounderEdit = () => {
+    setSelectedFounder(null);
+    setFounderName("");
+    setFounderRole("");
+    setFounderSchool("");
+    setFounderBio("");
+    setFounderImageUrl("");
+    setFounderDisplayOrder(foundersList.length + 1);
+  };
+
   // Data Calculations for Admin Real Analytics
   const getAnalyticsData = () => {
     // 1. Group users by levels
@@ -318,7 +515,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ user, logoUrl = "", onLo
           { id: "lessons", label: "Publish Lessons", icon: GraduationCap },
           { id: "moderation", label: "Safety Flag Queue", icon: AlertTriangle },
           { id: "analytics", label: "Platform Analytics", icon: BarChart2 },
-          { id: "branding", label: "Branding & Logo", icon: Sparkles }
+          { id: "branding", label: "Branding & Logo", icon: Sparkles },
+          { id: "founders", label: "Manage Founders", icon: Users }
         ].map((tab) => {
           const Icon = tab.icon;
           return (
@@ -608,13 +806,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ user, logoUrl = "", onLo
             </div>
 
             {/* Special Super Admin Info Bar */}
-            {user.email?.toLowerCase() === "generaskagiraneza@gmail.com" && (
+            {user.email && isAdminEmail(user.email) && (
               <div className="bg-blue-50 border border-blue-200/60 rounded-xl p-4 flex items-start gap-3">
                 <Sparkles className="h-5 w-5 text-blue-600 shrink-0 mt-0.5" />
                 <div className="space-y-0.5">
                   <h4 className="text-xs font-extrabold text-blue-900 uppercase tracking-wide">Super Admin Mode Active</h4>
                   <p className="text-xs text-blue-700 leading-relaxed">
-                    Welcome, <strong>{user.name}</strong>. As the Super Administrator, you have total access. You can manage student, teacher, and administrator accounts instantly by changing their roles in the table dropdowns below.
+                    Welcome, <strong>{user.name}</strong>. As a Super Administrator, you have total access. You can manage student, teacher, and administrator accounts instantly by changing their roles in the table dropdowns below.
                   </p>
                 </div>
               </div>
@@ -648,6 +846,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ user, logoUrl = "", onLo
                       <th className="py-3 px-4">Level</th>
                       <th className="py-3 px-4">Accumulated XP</th>
                       <th className="py-3 px-4">Badges</th>
+                      <th className="py-3 px-4 text-center">Weekly Spotlight</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -677,8 +876,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ user, logoUrl = "", onLo
                           );
                         })
                         .map((usr) => {
-                          const isSuperAdminUser = usr.email?.toLowerCase() === "generaskagiraneza@gmail.com";
-                          const isCurrentSuperAdmin = user.email?.toLowerCase() === "generaskagiraneza@gmail.com";
+                          const isSuperAdminUser = usr.email ? isAdminEmail(usr.email) : false;
+                          const isCurrentSuperAdmin = user.email ? isAdminEmail(user.email) : false;
                           
                           return (
                             <tr key={usr.userId} className="border-b border-slate-50 hover:bg-slate-50/50 transition">
@@ -732,6 +931,38 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ user, logoUrl = "", onLo
                                   ))}
                                 </div>
                               </td>
+                              <td className="py-3.5 px-4 text-center">
+                                {(!usr.role || usr.role === "student") ? (
+                                  usr.weeklySpotlight ? (
+                                    <div className="flex flex-col items-center gap-1">
+                                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-500 text-slate-950 font-extrabold px-2 py-0.5 text-[9px] uppercase tracking-wider animate-pulse">
+                                        👑 Active
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleRemoveSpotlight(usr.userId, usr.name)}
+                                        className="text-[9px] font-bold text-rose-500 hover:underline hover:text-rose-600 transition cursor-pointer"
+                                      >
+                                        Remove
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setSpotlightUser(usr);
+                                        setSpotlightReasonText("");
+                                        setSpotlightWeekText(`Week of ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`);
+                                      }}
+                                      className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-600 hover:text-amber-700 bg-slate-50 hover:bg-amber-50 border border-slate-200/60 hover:border-amber-200/60 px-2.5 py-1.2 rounded-xl transition cursor-pointer"
+                                    >
+                                      Pin 👑
+                                    </button>
+                                  )
+                                ) : (
+                                  <span className="text-slate-300 font-mono">-</span>
+                                )}
+                              </td>
                             </tr>
                           );
                         })
@@ -740,6 +971,90 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ user, logoUrl = "", onLo
                 </table>
               </div>
             </div>
+
+            {/* Spotlight Modal Dialog */}
+            {spotlightUser && (
+              <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto">
+                <div className="bg-white rounded-2xl border border-slate-100 p-6 sm:p-8 max-w-lg w-full shadow-2xl space-y-5">
+                  <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+                    <h3 className="text-sm font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                      <Sparkles className="h-5 w-5 text-amber-500 fill-amber-500/10" />
+                      Pin Weekly Student Spotlight
+                    </h3>
+                    <button
+                      type="button"
+                      onClick={() => setSpotlightUser(null)}
+                      className="text-slate-400 hover:text-slate-600 font-extrabold text-xs"
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                  <form onSubmit={handleSaveSpotlight} className="space-y-4">
+                    <div className="rounded-xl bg-slate-50 border border-slate-100 p-4">
+                      <div className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">Target Student</div>
+                      <div className="text-sm font-bold text-slate-800 mt-1">{spotlightUser.name}</div>
+                      <div className="text-xs text-slate-500 mt-0.5">{spotlightUser.school} • {spotlightUser.xp} XP</div>
+                    </div>
+
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1">
+                          Commendation Reason / Praise
+                        </label>
+                        <textarea
+                          required
+                          rows={4}
+                          value={spotlightReasonText}
+                          onChange={(e) => setSpotlightReasonText(e.target.value)}
+                          placeholder="e.g. Generas has demonstrated extreme dedication this week by completing all speaking challenges, maintaining a 7-day streak, and actively helping other students revise their essay drafts. An exemplary EFC student!"
+                          className="w-full text-xs font-medium text-slate-800 border border-slate-200 rounded-xl p-3 focus:border-blue-500 outline-none transition leading-relaxed resize-none"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1">
+                          Active Spotlight Week
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={spotlightWeekText}
+                          onChange={(e) => setSpotlightWeekText(e.target.value)}
+                          placeholder="e.g. Week of Jun 26, 2026"
+                          className="w-full text-xs font-semibold text-slate-800 border border-slate-200 rounded-xl px-3 py-2.5 focus:border-blue-500 outline-none transition bg-white"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
+                      <button
+                        type="button"
+                        onClick={() => setSpotlightUser(null)}
+                        className="rounded-xl border border-slate-200 text-slate-500 hover:text-slate-700 font-bold text-xs px-5 py-2.5 transition cursor-pointer"
+                        disabled={isSubmittingSpotlight}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        className="rounded-xl bg-slate-900 text-white font-extrabold text-xs px-6 py-2.5 hover:bg-slate-800 active:scale-95 transition flex items-center gap-1.5 cursor-pointer disabled:opacity-80"
+                        disabled={isSubmittingSpotlight}
+                      >
+                        {isSubmittingSpotlight ? (
+                          <>
+                            <div className="h-3 w-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                            Pinning...
+                          </>
+                        ) : (
+                          "Confirm Spotlight 🌟"
+                        )}
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -831,6 +1146,93 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ user, logoUrl = "", onLo
                 Publish Curriculum Module
               </button>
             </form>
+
+            {/* Pending Teacher Lessons Verification */}
+            <div className="border-t border-slate-100 pt-8 mt-8 space-y-4">
+              <div className="space-y-1">
+                <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                  <GraduationCap className="h-5 w-5 text-indigo-600 animate-pulse" />
+                  Teacher Course & Lesson Verification Queue
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Review and verify lesson drafts submitted by school teachers before they go live on the platform every Monday.
+                </p>
+              </div>
+
+              {adminLessons.filter(l => l.status === "pending").length === 0 ? (
+                <div className="rounded-xl border border-dashed border-slate-200 p-8 text-center text-xs font-semibold text-slate-400">
+                  No teacher course or lesson drafts are currently pending verification.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-4">
+                  {adminLessons.filter(l => l.status === "pending").map((lesson) => (
+                    <div key={lesson.id} className="rounded-xl border border-slate-200 bg-slate-50/50 p-5 space-y-4 shadow-xs">
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-3">
+                        <div className="space-y-0.5">
+                          <h4 className="text-sm font-extrabold text-slate-900">{lesson.title}</h4>
+                          <p className="text-xs text-slate-500">
+                            Submitted by <strong>Teacher {lesson.createdByTeacherName || "Faculty Member"}</strong> on {new Date(lesson.createdAt).toLocaleDateString()}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="px-2 py-0.5 text-[10px] font-bold rounded-md bg-blue-50 text-blue-700 border border-blue-100 uppercase capitalize">
+                            {lesson.category}
+                          </span>
+                          <span className="px-2 py-0.5 text-[10px] font-bold rounded-md bg-amber-50 text-amber-700 border border-amber-100 uppercase">
+                            {lesson.difficultyLevel}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <h5 className="text-[10px] font-extrabold uppercase tracking-wide text-slate-400">Lesson Body & Syllabus:</h5>
+                        <div className="text-xs text-slate-600 bg-white border border-slate-200 rounded-lg p-3 max-h-48 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+                          {lesson.contentBody}
+                        </div>
+                      </div>
+
+                      {lesson.resources && lesson.resources.length > 0 && (
+                        <div className="space-y-1">
+                          <h5 className="text-[10px] font-extrabold uppercase tracking-wide text-slate-400">Reference Materials:</h5>
+                          <div className="flex flex-wrap gap-1.5">
+                            {lesson.resources.map((res, i) => (
+                              <span key={i} className="px-2 py-0.5 text-[10px] font-medium rounded-full bg-slate-100 text-slate-600 border border-slate-200">
+                                {res}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="flex justify-between items-center bg-white border border-slate-200/50 rounded-lg px-4 py-3">
+                        <span className="text-xs font-bold text-slate-600 flex items-center gap-1.5">
+                          <Calendar className="h-4 w-4 text-indigo-500" />
+                          Release Target Monday: <strong className="text-indigo-950">{lesson.weeklyScheduleDate || "Next Monday Cycle"}</strong>
+                        </span>
+
+                        <button
+                          onClick={() => handleApproveLesson(lesson.id)}
+                          disabled={isApprovingLesson === lesson.id}
+                          className="rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 text-xs font-extrabold px-4 py-2 flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                        >
+                          {isApprovingLesson === lesson.id ? (
+                            <>
+                              <div className="h-3 w-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                              Verifying...
+                            </>
+                          ) : (
+                            <>
+                              <CheckCircle className="h-4 w-4" />
+                              Verify & Approve Course
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -971,6 +1373,67 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ user, logoUrl = "", onLo
               </div>
             </div>
 
+            {/* Cloudinary Integration Credentials Status */}
+            <div className="bg-blue-50/50 rounded-2xl border border-blue-100/50 p-4 space-y-3.5">
+              <div className="flex items-center gap-2">
+                <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span className="text-[11px] font-bold text-blue-800 uppercase tracking-wider">Cloudinary Upload Service: Active</span>
+              </div>
+              <div className="grid grid-cols-2 gap-3 text-left">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                    Cloud Name
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="dzllg8zxm"
+                    value={cloudinaryCloudName}
+                    onChange={(e) => {
+                      const val = e.target.value.trim();
+                      setCloudinaryCloudName(val);
+                      localStorage.setItem("cloudinary_cloud_name", val);
+                    }}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-mono outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                    API Key
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="375193569628911"
+                    value={cloudinaryApiKey}
+                    onChange={(e) => {
+                      const val = e.target.value.trim();
+                      setCloudinaryApiKey(val);
+                      localStorage.setItem("cloudinary_api_key", val);
+                    }}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-mono outline-none focus:border-blue-500"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  Cloudinary Upload Preset (Unsigned)
+                </label>
+                <input
+                  type="text"
+                  placeholder="ml_default"
+                  value={cloudinaryPreset}
+                  onChange={(e) => {
+                    const val = e.target.value.trim();
+                    setCloudinaryPreset(val);
+                    localStorage.setItem("cloudinary_upload_preset", val);
+                  }}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-mono outline-none focus:border-blue-500"
+                />
+                <span className="text-[9px] text-slate-400 block mt-1 leading-normal">
+                  To enable direct browser-based uploads, make sure your Cloudinary settings have an "unsigned" upload preset named <code className="bg-slate-150 px-1 py-0.5 rounded text-slate-700 font-mono">ml_default</code> (or type your custom preset above).
+                </span>
+              </div>
+            </div>
+
             {/* File Upload Drop Zone */}
             <div
               onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
@@ -1046,6 +1509,294 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ user, logoUrl = "", onLo
                   "Upload & Save Logo"
                 )}
               </button>
+            </div>
+          </div>
+        )}
+
+        {activeTab === "founders" && (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+            {/* Left Column: Form (Add or Edit) */}
+            <div className="lg:col-span-5">
+              <div className="bg-white rounded-2xl border border-slate-100 p-6 shadow-xs space-y-4 sticky top-6">
+                <div className="space-y-1">
+                  <div className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-2.5 py-0.5 text-[10px] font-bold text-blue-700 uppercase tracking-wider border border-blue-100">
+                    {selectedFounder ? "Edit Mode" : "Creation Mode"}
+                  </div>
+                  <h3 className="text-base font-extrabold text-slate-900">
+                    {selectedFounder ? "Update Founder Details" : "Register New Founder"}
+                  </h3>
+                  <p className="text-xs text-slate-500 leading-relaxed">
+                    Provide the academic credentials, biographic profile, and portrait picture of the young leader.
+                  </p>
+                </div>
+
+                <form onSubmit={handleSubmitFounder} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5">Full Name *</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. Alice Kanyana"
+                      value={founderName}
+                      onChange={(e) => setFounderName(e.target.value)}
+                      className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-xs focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1.5">Active Role *</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="e.g. Platform Architect"
+                        value={founderRole}
+                        onChange={(e) => setFounderRole(e.target.value)}
+                        className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-xs focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1.5">Display Order (Rank) *</label>
+                      <input
+                        type="number"
+                        min="1"
+                        required
+                        value={founderDisplayOrder}
+                        onChange={(e) => setFounderDisplayOrder(Number(e.target.value) || 1)}
+                        className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-xs focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5">High School Affiliation *</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. Gisenyi High School"
+                      value={founderSchool}
+                      onChange={(e) => setFounderSchool(e.target.value)}
+                      className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-xs focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5">Portrait/Image Photo (Optional)</label>
+                    <div className="flex flex-col sm:flex-row items-stretch gap-2">
+                      <input
+                        type="url"
+                        placeholder="https://images.unsplash.com/photo-..."
+                        value={founderImageUrl}
+                        onChange={(e) => setFounderImageUrl(e.target.value)}
+                        className="flex-1 rounded-xl border border-slate-200 px-3.5 py-2 text-xs focus:border-blue-500 focus:ring-1 focus:ring-blue-500 font-mono"
+                      />
+                      
+                      {/* Cloudinary Instant Photo Upload Button */}
+                      <div className="relative">
+                        <input
+                          type="file"
+                          id="founder-photo-file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={async (e) => {
+                            if (e.target.files && e.target.files[0]) {
+                              const file = e.target.files[0];
+                              if (file.size > 5 * 1024 * 1024) {
+                                showToast("Founder portrait must be less than 5MB.", "error");
+                                return;
+                              }
+                              setIsUploadingFounderPhoto(true);
+                              try {
+                                const url = await uploadImageToCloudinary(file, cloudinaryPreset);
+                                setFounderImageUrl(url);
+                                showToast("Founder photo uploaded to Cloudinary!", "success");
+                              } catch (err) {
+                                console.error("Founder photo upload failed:", err);
+                                showToast("Failed to upload founder photo.", "error");
+                              } finally {
+                                setIsUploadingFounderPhoto(false);
+                              }
+                            }
+                          }}
+                        />
+                        <button
+                          type="button"
+                          disabled={isUploadingFounderPhoto}
+                          onClick={() => document.getElementById("founder-photo-file")?.click()}
+                          className="h-full rounded-xl bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white font-bold px-4 py-2 text-xs flex items-center gap-1.5 cursor-pointer whitespace-nowrap shadow-sm min-h-[38px]"
+                        >
+                          {isUploadingFounderPhoto ? (
+                            <>
+                              <div className="h-3 w-3 rounded-full border-2 border-white border-t-transparent animate-spin" />
+                              Uploading...
+                            </>
+                          ) : (
+                            <>
+                              <Sparkles className="h-3.5 w-3.5" />
+                              Upload Image
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                    
+                    {/* Live Preview of Founder Image */}
+                    {founderImageUrl && (
+                      <div className="mt-2.5 flex items-center gap-3 bg-slate-50 border border-slate-100 rounded-xl p-2.5">
+                        <div className="h-12 w-12 rounded-xl overflow-hidden border border-slate-100 shadow-xs flex-shrink-0 bg-white">
+                          <img src={founderImageUrl} alt="Founder Preview" className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+                        </div>
+                        <div className="min-w-0">
+                          <span className="text-[10px] font-bold text-slate-500 block">Previewing Image</span>
+                          <span className="text-[9px] text-slate-400 block truncate font-mono">{founderImageUrl}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setFounderImageUrl("")}
+                          className="ml-auto text-[10px] font-extrabold text-red-600 hover:underline px-2"
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    )}
+                    <span className="text-[10px] text-slate-400 block mt-1.5 leading-relaxed">
+                      Upload a square portrait of the pioneer, or paste a direct image URL. Left blank, default initials fallback will be used.
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5">Inspiring Biography (Bio) *</label>
+                    <textarea
+                      required
+                      rows={4}
+                      maxLength={300}
+                      placeholder="Share their story and contribution to the campaign..."
+                      value={founderBio}
+                      onChange={(e) => setFounderBio(e.target.value)}
+                      className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-xs focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                    />
+                    <div className="flex justify-between items-center text-[10px] text-slate-400 mt-1">
+                      <span>Maximum 300 characters</span>
+                      <span>{founderBio.length}/300</span>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2 pt-2">
+                    {selectedFounder && (
+                      <button
+                        type="button"
+                        onClick={handleCancelFounderEdit}
+                        className="flex-1 rounded-xl border border-slate-200 text-slate-600 font-bold px-4 py-2.5 text-xs hover:bg-slate-50 cursor-pointer text-center"
+                      >
+                        Cancel
+                      </button>
+                    )}
+                    <button
+                      type="submit"
+                      disabled={isSubmittingFounder}
+                      className="flex-2 rounded-xl bg-blue-600 text-white font-bold px-5 py-2.5 text-xs hover:bg-blue-500 disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2 shadow-md"
+                    >
+                      {isSubmittingFounder ? (
+                        <>
+                          <div className="h-3 w-3 rounded-full border-2 border-white border-t-transparent animate-spin" />
+                          Saving...
+                        </>
+                      ) : selectedFounder ? (
+                        "Update Founder Profile"
+                      ) : (
+                        "Add Campaign Founder"
+                      )}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+
+            {/* Right Column: List of Current Founders */}
+            <div className="lg:col-span-7 space-y-6">
+              <div className="bg-white rounded-2xl border border-slate-100 p-6 shadow-xs space-y-4">
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-900">Active Founders & Developers ({foundersList.length})</h3>
+                  <p className="text-xs text-slate-500 leading-relaxed">
+                    These profiles are loaded in order of display order and presented in the campaign's main landing page.
+                  </p>
+                </div>
+
+                {isLoadingFounders ? (
+                  <div className="flex flex-col items-center justify-center py-16 space-y-3">
+                    <div className="h-8 w-8 rounded-full border-2 border-blue-600 border-t-transparent animate-spin" />
+                    <p className="text-xs text-slate-500 font-bold uppercase tracking-widest">
+                      Retrieving Campaign Profiles...
+                    </p>
+                  </div>
+                ) : foundersList.length === 0 ? (
+                  <div className="text-center py-16 border border-dashed border-slate-200 rounded-2xl p-6">
+                    <Users className="h-10 w-10 text-slate-300 mx-auto mb-3" />
+                    <p className="text-xs font-bold text-slate-600">No founders registered yet</p>
+                    <p className="text-[10px] text-slate-400 mt-1">
+                      Use the creation form on the left to register the pioneering leaders.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-100">
+                    {foundersList.map((founder) => (
+                      <div key={founder.id} className="py-4 flex gap-4 first:pt-0 last:pb-0 group">
+                        {/* Avatar */}
+                        {founder.imageUrl ? (
+                          <div className="h-12 w-12 rounded-xl overflow-hidden border border-slate-100 shadow-xs flex-shrink-0 bg-slate-50">
+                            <img src={founder.imageUrl} alt={founder.name} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+                          </div>
+                        ) : (
+                          <div className="h-12 w-12 rounded-xl bg-gradient-to-tr from-blue-50 to-indigo-100 border border-indigo-100 flex items-center justify-center text-blue-700 font-extrabold text-sm shadow-xs flex-shrink-0">
+                            {founder.name.split(" ").map(n => n[0]).join("").substring(0, 2).toUpperCase()}
+                          </div>
+                        )}
+
+                        {/* Text Info */}
+                        <div className="flex-1 space-y-1.5 min-w-0">
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <h4 className="text-sm font-extrabold text-slate-900 flex items-center gap-2">
+                                {founder.name}
+                                <span className="font-mono bg-slate-100 text-slate-600 text-[9px] font-bold px-1.5 py-0.5 rounded-sm">
+                                  Rank #{founder.displayOrder}
+                                </span>
+                              </h4>
+                              <p className="text-[11px] font-bold text-orange-600 mt-0.5">
+                                {founder.role} • <span className="text-slate-400 font-medium">{founder.school}</span>
+                              </p>
+                            </div>
+
+                            {/* Actions Buttons */}
+                            <div className="flex gap-1.5 opacity-80 group-hover:opacity-100 transition-opacity">
+                              <button
+                                type="button"
+                                onClick={() => handleEditFounderSelect(founder)}
+                                className="h-7 w-7 rounded-lg border border-slate-200 text-slate-600 hover:text-blue-600 hover:border-blue-200 flex items-center justify-center bg-white transition hover:scale-105 cursor-pointer"
+                                title="Edit Profile"
+                              >
+                                <Sparkles className="h-3.5 w-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteFounder(founder.id)}
+                                className="h-7 w-7 rounded-lg border border-slate-200 text-slate-600 hover:text-red-600 hover:border-red-200 flex items-center justify-center bg-white transition hover:scale-105 cursor-pointer"
+                                title="Delete Profile"
+                              >
+                                <Trash className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          </div>
+
+                          <p className="text-xs text-slate-500 leading-relaxed font-normal italic">
+                            "{founder.bio}"
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}

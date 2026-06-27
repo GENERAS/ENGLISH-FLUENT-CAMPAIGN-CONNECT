@@ -1,14 +1,26 @@
 import React, { useEffect, useState } from "react";
-import { ArrowRight, Award, MessageSquare, Mic, ShieldAlert, Sparkles, Star, Users, CheckCircle, Globe, BookOpen, Send } from "lucide-react";
-import { getCampaignRealStats } from "../firebase-utils";
+import { ArrowRight, Award, MessageSquare, Mic, ShieldAlert, Sparkles, Star, Users, CheckCircle, Globe, BookOpen, Send, Loader2, Award as Medal, Heart, Mail, Check } from "lucide-react";
+import { getCampaignRealStats, getFounders, subscribeToAllUsers } from "../firebase-utils";
 import { EFCLogo } from "./EFCLogo";
+import { Founder, UserProfile } from "../types";
+import { motion, AnimatePresence } from "motion/react";
+import { useToast } from "./Toast";
 
 interface CampaignLandingProps {
   onJoinCampaign: () => void;
   user: any;
+  founders?: Founder[];
+  loadingFounders?: boolean;
+  onOpenStory?: () => void;
 }
 
-export const CampaignLanding: React.FC<CampaignLandingProps> = ({ onJoinCampaign, user }) => {
+export const CampaignLanding: React.FC<CampaignLandingProps> = ({ 
+  onJoinCampaign, 
+  user,
+  founders = [],
+  loadingFounders = false,
+  onOpenStory
+}) => {
   const [stats, setStats] = useState({
     totalStudents: 0,
     totalWritings: 0,
@@ -16,22 +28,71 @@ export const CampaignLanding: React.FC<CampaignLandingProps> = ({ onJoinCampaign
     feedbackProvided: 0
   });
   const [loading, setLoading] = useState(true);
+  const [localFounders, setLocalFounders] = useState<Founder[]>([]);
+  const [localLoadingFounders, setLocalLoadingFounders] = useState(true);
   const [contactForm, setContactForm] = useState({ name: "", email: "", school: "", message: "" });
   const [submittedContact, setSubmittedContact] = useState(false);
+  const { showToast } = useToast();
+
+  // Weekly Spotlight States
+  const [spotlights, setSpotlights] = useState<UserProfile[]>([]);
+  const [loadingSpotlights, setLoadingSpotlights] = useState(true);
+  const [selectedSpotlight, setSelectedSpotlight] = useState<UserProfile | null>(null);
+  const [peerMessage, setPeerMessage] = useState("");
+  const [sendingMessage, setSendingMessage] = useState(false);
+  const [messageSuccess, setMessageSuccess] = useState(false);
 
   useEffect(() => {
-    async function loadStats() {
+    // Real-time listen to spotlight changes on Firestore
+    const unsubscribe = subscribeToAllUsers((allUsers) => {
+      const activeSpotlights = allUsers.filter(
+        (u) => u.weeklySpotlight === true && (!u.role || u.role === "student")
+      );
+      setSpotlights(activeSpotlights);
+      setLoadingSpotlights(false);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    async function loadStatsAndFounders() {
       try {
-        const realStats = await getCampaignRealStats();
+        const [realStats, foundersList] = await Promise.all([
+          getCampaignRealStats(),
+          getFounders()
+        ]);
         setStats(realStats);
+        setLocalFounders(foundersList);
       } catch (err) {
-        console.error("Failed to load statistics:", err);
+        console.error("Failed to load statistics and founders:", err);
       } finally {
         setLoading(false);
+        setLocalLoadingFounders(false);
       }
     }
-    loadStats();
+    loadStatsAndFounders();
   }, []);
+
+  const displayFounders = founders.length > 0 ? founders : localFounders;
+  const displayLoading = loadingFounders && localLoadingFounders;
+
+  const handleSendPeerMessage = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!peerMessage.trim() || !selectedSpotlight) return;
+    setSendingMessage(true);
+    // Simulate real communication channel setup
+    setTimeout(() => {
+      setSendingMessage(false);
+      setMessageSuccess(true);
+      showToast(`Encouraging message sent successfully to ${selectedSpotlight.name}! 🚀`, "success");
+      setTimeout(() => {
+        setPeerMessage("");
+        setSelectedSpotlight(null);
+        setMessageSuccess(false);
+      }, 2000);
+    }, 1500);
+  };
 
   const handleContactSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -58,7 +119,7 @@ export const CampaignLanding: React.FC<CampaignLandingProps> = ({ onJoinCampaign
               </div>
               <h1 className="font-sans text-4xl font-extrabold tracking-tight text-slate-900 sm:text-5xl md:text-6xl leading-[1.1]">
                 Mastering English, <br />
-                <span className="bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
+                <span className="bg-gradient-to-r from-blue-600 via-orange-500 to-purple-600 bg-clip-text text-transparent">
                   Unlocking the Future.
                 </span>
               </h1>
@@ -73,12 +134,12 @@ export const CampaignLanding: React.FC<CampaignLandingProps> = ({ onJoinCampaign
                   {user ? "Go to My Dashboard" : "Register and Join Campaign"}
                   <ArrowRight className="h-4 w-4" />
                 </button>
-                <a
-                  href="#mission"
-                  className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-6 py-3.5 text-sm font-bold text-slate-700 transition hover:bg-slate-50 hover:text-slate-900"
+                <button
+                  onClick={onOpenStory}
+                  className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-6 py-3.5 text-sm font-bold text-slate-700 transition hover:bg-slate-50 hover:text-slate-900 cursor-pointer"
                 >
                   Explore Our Story
-                </a>
+                </button>
               </div>
             </div>
 
@@ -162,11 +223,136 @@ export const CampaignLanding: React.FC<CampaignLandingProps> = ({ onJoinCampaign
         </div>
       </section>
 
+      {/* Weekly Student Spotlights Section */}
+      <section className="py-16 bg-gradient-to-b from-white to-slate-50/50 border-b border-slate-100">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="text-center max-w-3xl mx-auto space-y-3 mb-12">
+            <div className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-amber-500/10 text-amber-700 border border-amber-500/25 text-xs font-extrabold uppercase tracking-wide">
+              <Star className="h-3.5 w-3.5 fill-current text-amber-500" />
+              <span>Weekly EFC Student Spotlights</span>
+            </div>
+            <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight sm:text-4xl">
+              Exemplifying English Fluency
+            </h2>
+            <p className="text-sm text-slate-500 leading-relaxed">
+              Every week, our Campaign Administrators highlight outstanding student scholars who completed challenging fluency badges, achieved remarkable XP milestones, and led peer debates.
+            </p>
+          </div>
+
+          {loadingSpotlights ? (
+            <div className="flex flex-col items-center justify-center py-12 space-y-3">
+              <Loader2 className="h-8 w-8 text-blue-600 animate-spin" />
+              <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Loading Weekly Champions...</span>
+            </div>
+          ) : spotlights.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-8 text-center max-w-lg mx-auto shadow-xs space-y-3">
+              <span className="text-3xl">🏅</span>
+              <h3 className="text-sm font-bold text-slate-800">No Weekly Champions Pinned Yet</h3>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                Keep practicing essays, submitting audio recordings, and participating in peer debates! Campaign Administrators select student spotlight champions every Friday.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+              {spotlights.map((student) => (
+                <div
+                  key={student.userId}
+                  className="relative rounded-2xl border border-amber-200 bg-white p-6 shadow-md shadow-amber-500/5 hover:translate-y-[-4px] transition duration-300 flex flex-col justify-between overflow-hidden"
+                >
+                  {/* Decorative glowing background corner */}
+                  <div className="absolute top-0 right-0 h-24 w-24 rounded-bl-full bg-amber-500/5 pointer-events-none" />
+
+                  <div className="space-y-4">
+                    {/* Top Header Badge & Week */}
+                    <div className="flex items-center justify-between">
+                      <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500 text-slate-950 text-[9px] font-extrabold uppercase px-2.5 py-1 tracking-wider">
+                        👑 Student Champion
+                      </span>
+                      <span className="text-[10px] font-bold text-slate-400 font-mono">
+                        {student.spotlightWeek || "Active Week"}
+                      </span>
+                    </div>
+
+                    {/* Student Info Card */}
+                    <div className="flex items-center gap-3 pt-1">
+                      <div className="h-12 w-12 rounded-xl bg-gradient-to-tr from-amber-500 to-yellow-300 p-[2px] shadow-sm shrink-0">
+                        {student.imageUrl ? (
+                          <img
+                            src={student.imageUrl}
+                            alt={student.name}
+                            className="h-full w-full object-cover rounded-lg border-2 border-white"
+                            referrerPolicy="no-referrer"
+                          />
+                        ) : (
+                          <div className="h-full w-full rounded-lg bg-slate-950 text-white flex items-center justify-center font-extrabold text-sm uppercase">
+                            {student.name.split(" ").map(n => n[0]).join("").substring(0, 2)}
+                          </div>
+                        )}
+                      </div>
+                      <div className="space-y-0.5">
+                        <h4 className="text-sm font-extrabold text-slate-800 leading-snug">{student.name}</h4>
+                        <p className="text-[11px] text-slate-500 font-semibold">{student.school}</p>
+                      </div>
+                    </div>
+
+                    {/* XP & Level Badges */}
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      <span className="px-2.5 py-1 rounded-lg border border-blue-100 bg-blue-50 text-[10px] font-extrabold text-blue-700">
+                        {student.level || "Beginner"} Level
+                      </span>
+                      <span className="px-2.5 py-1 rounded-lg border border-amber-100 bg-amber-50 text-[10px] font-extrabold text-amber-700 font-mono">
+                        {student.xp || 0} XP
+                      </span>
+                    </div>
+
+                    {/* Completed Badges Row */}
+                    {student.badges && student.badges.length > 0 && (
+                      <div className="space-y-1.5 pt-1">
+                        <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Completed Badges</div>
+                        <div className="flex flex-wrap gap-1">
+                          {student.badges.map((b, idx) => (
+                            <span key={idx} className="bg-slate-100 text-[9px] font-bold px-2 py-0.5 rounded-md text-slate-600">
+                              🏆 {b}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Commendation Quote block */}
+                    {student.spotlightReason && (
+                      <div className="relative border-l-2 border-amber-500 bg-amber-500/5 rounded-r-xl p-3.5 mt-2">
+                        <span className="absolute -top-1 -left-1 text-2xl text-amber-500 opacity-20 font-serif">“</span>
+                        <p className="text-xs text-slate-600 italic leading-relaxed">
+                          {student.spotlightReason}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Connect Trigger */}
+                  <div className="pt-5 mt-4 border-t border-slate-50">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedSpotlight(student)}
+                      className="w-full inline-flex items-center justify-center gap-1.5 rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-bold text-white hover:bg-slate-800 transition cursor-pointer active:scale-95 shadow-sm"
+                    >
+                      <MessageSquare className="h-3.5 w-3.5" />
+                      View Credentials & Talk 💬
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+
       {/* Our Mission & Value Proposition */}
       <section id="mission" className="py-20 bg-white">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="text-center max-w-3xl mx-auto space-y-4 mb-16">
-            <h2 className="text-xs font-extrabold uppercase tracking-widest text-indigo-600">Our National Mission</h2>
+            <h2 className="text-xs font-extrabold uppercase tracking-widest text-purple-600">Our National Mission</h2>
             <p className="text-3xl font-extrabold text-slate-900 sm:text-4xl">
               Fostering Communication and Intellectual Leadership
             </p>
@@ -177,7 +363,7 @@ export const CampaignLanding: React.FC<CampaignLandingProps> = ({ onJoinCampaign
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
             <div className="rounded-2xl border border-slate-100 bg-slate-50/50 p-8 transition hover:translate-y-[-4px] hover:shadow-lg hover:shadow-slate-100 duration-300">
-              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-indigo-500 text-white shadow-md shadow-indigo-100 mb-6">
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-600 text-white shadow-md shadow-blue-100 mb-6">
                 <BookOpen className="h-6 w-6" />
               </div>
               <h3 className="text-lg font-bold text-slate-900 mb-2">Structured Essays & Prompts</h3>
@@ -187,7 +373,7 @@ export const CampaignLanding: React.FC<CampaignLandingProps> = ({ onJoinCampaign
             </div>
 
             <div className="rounded-2xl border border-slate-100 bg-slate-50/50 p-8 transition hover:translate-y-[-4px] hover:shadow-lg hover:shadow-slate-100 duration-300">
-              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-violet-500 text-white shadow-md shadow-violet-100 mb-6">
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-orange-600 text-white shadow-md shadow-orange-100 mb-6">
                 <Mic className="h-6 w-6" />
               </div>
               <h3 className="text-lg font-bold text-slate-900 mb-2">Speaking & Pronunciation</h3>
@@ -197,7 +383,7 @@ export const CampaignLanding: React.FC<CampaignLandingProps> = ({ onJoinCampaign
             </div>
 
             <div className="rounded-2xl border border-slate-100 bg-slate-50/50 p-8 transition hover:translate-y-[-4px] hover:shadow-lg hover:shadow-slate-100 duration-300">
-              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-amber-500 text-white shadow-md shadow-amber-100 mb-6">
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-purple-600 text-white shadow-md shadow-purple-100 mb-6">
                 <Users className="h-6 w-6" />
               </div>
               <h3 className="text-lg font-bold text-slate-900 mb-2">Community Debates</h3>
@@ -223,12 +409,12 @@ export const CampaignLanding: React.FC<CampaignLandingProps> = ({ onJoinCampaign
               </p>
               <div className="flex items-center gap-6 pt-4">
                 <div className="flex flex-col">
-                  <span className="text-2xl font-extrabold text-indigo-600">40%+</span>
+                  <span className="text-2xl font-extrabold text-blue-600">40%+</span>
                   <span className="text-xs font-semibold text-slate-400">Confidence Increase</span>
                 </div>
                 <div className="h-8 w-px bg-slate-200"></div>
                 <div className="flex flex-col">
-                  <span className="text-2xl font-extrabold text-indigo-600">50+</span>
+                  <span className="text-2xl font-extrabold text-blue-600">50+</span>
                   <span className="text-xs font-semibold text-slate-400">Schools Registered</span>
                 </div>
               </div>
@@ -236,11 +422,11 @@ export const CampaignLanding: React.FC<CampaignLandingProps> = ({ onJoinCampaign
             
             <div className="lg:col-span-6 bg-white rounded-2xl border border-slate-100 p-8 shadow-sm">
               <h4 className="text-lg font-bold text-slate-900 mb-2">Program Endorsement</h4>
-              <blockquote className="text-base italic text-slate-600 border-l-4 border-indigo-500 pl-4 mb-4">
+              <blockquote className="text-base italic text-slate-600 border-l-4 border-blue-600 pl-4 mb-4">
                 "The English Fluency Campaign has completely revitalized my English classroom. Instead of boring workbooks, students are excited to record speaking submissions and discuss current debate topics with students from other districts."
               </blockquote>
               <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-indigo-100 text-indigo-700 font-bold">
+                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-100 text-blue-700 font-bold">
                   MT
                 </div>
                 <div>
@@ -253,10 +439,98 @@ export const CampaignLanding: React.FC<CampaignLandingProps> = ({ onJoinCampaign
         </div>
       </section>
 
+      {/* Founders & Educational Developers Section */}
+      <section id="founders" className="py-20 bg-slate-50/50 border-b border-slate-100">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="text-center max-w-3xl mx-auto space-y-4 mb-16">
+            <div className="inline-flex items-center gap-1.5 rounded-full bg-orange-50 px-3.5 py-1 text-xs font-bold text-orange-600 border border-orange-100 shadow-xs">
+              <Sparkles className="h-3 w-3" />
+              <span>Student Led Initiative</span>
+            </div>
+            <h2 className="text-3xl font-extrabold text-slate-900 sm:text-4xl tracking-tight">
+              Founders & Educational Developers
+            </h2>
+            <p className="text-base text-slate-500 leading-relaxed">
+              Meet the passionate high school leaders, developers, and curriculum designers who co-founded EFC to foster confidence, fluency, and leadership among Rwandan students.
+            </p>
+          </div>
+
+          {displayLoading ? (
+            <div className="flex flex-col items-center justify-center py-16 space-y-3">
+              <Loader2 className="h-8 w-8 text-blue-600 animate-spin" />
+              <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">
+                Loading Founders & Developers...
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+              {displayFounders.map((founder) => (
+                <div 
+                  key={founder.id}
+                  className="group relative bg-white rounded-3xl border border-slate-100 p-6 shadow-xs hover:shadow-xl hover:shadow-slate-100 hover:translate-y-[-4px] transition-all duration-300 flex flex-col justify-between overflow-hidden"
+                >
+                  {/* Subtle color highlight accent at top of card */}
+                  <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-blue-600 via-orange-500 to-purple-600" />
+                  
+                  <div>
+                    <div className="flex items-start gap-4 mb-5">
+                      {/* Avatar Photo with dynamic initials placeholder */}
+                      {founder.imageUrl ? (
+                        <div className="relative h-16 w-16 rounded-2xl overflow-hidden border-2 border-slate-100 shadow-xs flex-shrink-0 group-hover:scale-105 transition-transform duration-300">
+                          <img 
+                            src={founder.imageUrl} 
+                            alt={founder.name} 
+                            className="h-full w-full object-cover"
+                            referrerPolicy="no-referrer"
+                            onError={(e) => {
+                              (e.target as HTMLImageElement).style.display = "none";
+                            }}
+                          />
+                        </div>
+                      ) : (
+                        <div className="h-16 w-16 rounded-2xl bg-gradient-to-tr from-blue-50 to-indigo-100 border border-indigo-100 flex items-center justify-center text-blue-700 font-extrabold text-xl shadow-xs flex-shrink-0 group-hover:scale-105 transition-transform duration-300">
+                          {founder.name.split(" ").map(n => n[0]).join("").substring(0, 2).toUpperCase()}
+                        </div>
+                      )}
+
+                      <div className="space-y-1">
+                        <h3 className="text-base font-extrabold text-slate-900 group-hover:text-blue-600 transition-colors">
+                          {founder.name}
+                        </h3>
+                        <p className="text-xs font-bold text-orange-600">
+                          {founder.role}
+                        </p>
+                        <span className="inline-block rounded-md bg-slate-50 px-2 py-0.5 text-[10px] font-bold text-slate-500 border border-slate-100">
+                          {founder.school}
+                        </span>
+                      </div>
+                    </div>
+
+                    <p className="text-sm text-slate-600 leading-relaxed font-normal mb-6">
+                      "{founder.bio}"
+                    </p>
+                  </div>
+
+                  <div className="border-t border-slate-50 pt-4 flex items-center justify-between text-[11px] font-bold text-slate-400">
+                    <span className="flex items-center gap-1">
+                      <Medal className="h-3.5 w-3.5 text-blue-500" />
+                      EFC Core Founder
+                    </span>
+                    <span className="font-mono bg-blue-50 text-blue-600 px-2.5 py-0.5 rounded-full text-[10px]">
+                      Order #{founder.displayOrder}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+
       {/* School Partnership / Contact Form */}
       <section className="py-20 bg-white">
         <div className="mx-auto max-w-4xl px-4 sm:px-6 lg:px-8">
-          <div className="rounded-3xl border border-slate-100 bg-gradient-to-br from-slate-900 to-indigo-950 p-8 sm:p-12 text-white shadow-xl">
+          <div className="rounded-3xl border border-slate-100 bg-gradient-to-br from-slate-900 to-blue-950 p-8 sm:p-12 text-white shadow-xl">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-10 items-center">
               <div className="space-y-4">
                 <h3 className="text-2xl font-bold tracking-tight">Become a Partner School</h3>
@@ -265,11 +539,11 @@ export const CampaignLanding: React.FC<CampaignLandingProps> = ({ onJoinCampaign
                 </p>
                 <div className="space-y-2 pt-2">
                   <div className="flex items-center gap-3 text-xs text-slate-300 font-semibold">
-                    <CheckCircle className="h-4 w-4 text-indigo-400" />
+                    <CheckCircle className="h-4 w-4 text-blue-400" />
                     <span>Free platform training for educators</span>
                   </div>
                   <div className="flex items-center gap-3 text-xs text-slate-300 font-semibold">
-                    <CheckCircle className="h-4 w-4 text-indigo-400" />
+                    <CheckCircle className="h-4 w-4 text-blue-400" />
                     <span>Dedicated dashboard for grade tracking</span>
                   </div>
                 </div>
@@ -327,7 +601,7 @@ export const CampaignLanding: React.FC<CampaignLandingProps> = ({ onJoinCampaign
                     </div>
                     <button
                       type="submit"
-                      className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-3 text-sm font-bold text-white shadow-lg transition hover:bg-indigo-500 active:scale-95 cursor-pointer"
+                      className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-sm font-bold text-white shadow-lg transition hover:bg-blue-500 active:scale-95 cursor-pointer"
                     >
                       <Send className="h-4 w-4" />
                       Submit Partnership Request
@@ -344,7 +618,7 @@ export const CampaignLanding: React.FC<CampaignLandingProps> = ({ onJoinCampaign
       <footer className="bg-slate-900 text-slate-400 py-12 border-t border-slate-800">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 text-center space-y-4">
           <div className="flex items-center justify-center gap-2">
-            <div className="h-8 w-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center font-bold">
+            <div className="h-8 w-8 rounded-lg bg-blue-600 text-white flex items-center justify-center font-bold">
               EF
             </div>
             <span className="text-white font-sans font-bold tracking-tight">English Fluency National Campaign</span>
@@ -352,11 +626,149 @@ export const CampaignLanding: React.FC<CampaignLandingProps> = ({ onJoinCampaign
           <p className="text-xs max-w-md mx-auto leading-relaxed">
             Developing confident English speakers and logical writers globally. Under educational endorsement. All statistics are gathered from participating districts.
           </p>
+          <div className="flex flex-wrap justify-center gap-4 text-xs font-semibold pt-2">
+            <button
+              onClick={onOpenStory}
+              className="px-3.5 py-1.5 rounded-full bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 transition cursor-pointer flex items-center gap-1.5 shadow-sm"
+            >
+              <BookOpen className="h-3.5 w-3.5 text-orange-500" />
+              <span>Our Founders' Story</span>
+            </button>
+          </div>
           <div className="pt-4 border-t border-slate-800/60 text-[10px]">
             &copy; 2026 English Fluency Campaign Platform. Built with Cloud Ingress & Firebase Firestore. All rights reserved.
           </div>
         </div>
       </footer>
+
+      {/* Spotlight Peer Connect Modal */}
+      {selectedSpotlight && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto">
+          <div className="bg-white rounded-3xl border border-slate-100 p-6 sm:p-8 max-w-lg w-full shadow-2xl space-y-6 relative overflow-hidden">
+            <div className="absolute top-0 left-0 right-0 h-2 bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500" />
+
+            <div className="flex justify-between items-start pt-2">
+              <div className="space-y-1">
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-800 text-[10px] font-extrabold uppercase tracking-wide">
+                  <Star className="h-3 w-3 fill-current text-amber-500" />
+                  Connect with a Spotlight Champion
+                </div>
+                <h3 className="text-xl font-extrabold text-slate-900">
+                  {selectedSpotlight.name}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedSpotlight(null);
+                  setMessageSuccess(false);
+                }}
+                className="rounded-full bg-slate-100 p-1.5 text-slate-400 hover:text-slate-600 transition cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {/* Profile card summary */}
+              <div className="rounded-2xl bg-slate-50 border border-slate-100 p-4 space-y-3">
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center font-extrabold text-xs shrink-0 uppercase">
+                    {selectedSpotlight.name.split(" ").map(n => n[0]).join("").substring(0, 2)}
+                  </div>
+                  <div>
+                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Academic Institution</div>
+                    <div className="text-xs font-bold text-slate-800 leading-tight">{selectedSpotlight.school}</div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-200/60">
+                  <div>
+                    <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide">Current Rank</div>
+                    <div className="text-xs font-extrabold text-slate-800 mt-0.5">{selectedSpotlight.level || "Beginner"} level</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide">Scholar XP</div>
+                    <div className="text-xs font-extrabold text-slate-800 mt-0.5 font-mono">{selectedSpotlight.xp || 0} XP</div>
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-slate-200/60">
+                  <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide">Contact Address</div>
+                  <div className="flex items-center gap-1.5 mt-1 text-xs font-bold text-blue-600">
+                    <Mail className="h-3.5 w-3.5 shrink-0" />
+                    <span>{selectedSpotlight.email || `${selectedSpotlight.name.toLowerCase().replace(/\s+/g, '')}@school.edu`}</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const emailAddr = selectedSpotlight.email || `${selectedSpotlight.name.toLowerCase().replace(/\s+/g, '')}@school.edu`;
+                        navigator.clipboard.writeText(emailAddr);
+                        showToast("Email address copied to clipboard!", "success");
+                      }}
+                      className="text-[9px] font-extrabold bg-blue-50 text-blue-700 hover:bg-blue-100 px-2 py-0.5 rounded-md transition ml-auto cursor-pointer"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Chat form */}
+              <form onSubmit={handleSendPeerMessage} className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">
+                    Write Encouraging Note or Debate Invitation
+                  </label>
+                  <textarea
+                    required
+                    disabled={sendingMessage || messageSuccess}
+                    rows={4}
+                    value={peerMessage}
+                    onChange={(e) => setPeerMessage(e.target.value)}
+                    placeholder={`Hi ${selectedSpotlight.name}! Let's talk and practice together. I'm preparing for the next debate on AI and education...`}
+                    className="w-full text-xs font-medium text-slate-800 border border-slate-200 rounded-xl p-3 focus:border-blue-500 outline-none transition leading-relaxed resize-none bg-white disabled:bg-slate-50"
+                  />
+                </div>
+
+                <div className="flex gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedSpotlight(null);
+                      setMessageSuccess(false);
+                    }}
+                    className="w-1/2 rounded-xl border border-slate-200 text-slate-500 hover:text-slate-700 font-bold text-xs py-3 transition cursor-pointer"
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={sendingMessage || messageSuccess || !peerMessage.trim()}
+                    className="w-1/2 rounded-xl bg-slate-900 text-white font-extrabold text-xs py-3 hover:bg-slate-800 active:scale-95 transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    {sendingMessage ? (
+                      <>
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        Connecting...
+                      </>
+                    ) : messageSuccess ? (
+                      <>
+                        <Check className="h-3.5 w-3.5 text-emerald-400" />
+                        Message Sent!
+                      </>
+                    ) : (
+                      <>
+                        <Send className="h-3.5 w-3.5" />
+                        Send Note
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

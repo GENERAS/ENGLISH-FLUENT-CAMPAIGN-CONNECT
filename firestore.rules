@@ -99,5 +99,11 @@ service cloud.firestore {
       allow read: if true;
       allow write: if isAdmin();
     }
+
+    // 9. Founders & Developers
+    match /founders/{founderId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
   }
 }
