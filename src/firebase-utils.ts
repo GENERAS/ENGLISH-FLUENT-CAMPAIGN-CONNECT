@@ -64,6 +64,96 @@ async function fetchWithFallback<T>(
   }
 }
 
+interface PendingSyncItem {
+  id: string;
+  type: "writing" | "speaking";
+  data: any;
+  timestamp: string;
+}
+
+export function queueOfflineSubmission(type: "writing" | "speaking", data: any) {
+  const queueStr = localStorage.getItem("efc_offline_sync_queue") || "[]";
+  try {
+    const queue = JSON.parse(queueStr) as PendingSyncItem[];
+    const id = data.id || `${type}_sync_${Math.random().toString(36).substr(2, 9)}`;
+    if (!queue.some(item => item.id === id || (item.data && item.data.id === id))) {
+      queue.push({
+        id,
+        type,
+        data,
+        timestamp: new Date().toISOString()
+      });
+      localStorage.setItem("efc_offline_sync_queue", JSON.stringify(queue));
+      console.log(`Queued offline ${type} submission:`, id);
+    }
+    return id;
+  } catch (err) {
+    console.error("Failed to queue offline submission:", err);
+    return null;
+  }
+}
+
+export async function syncPendingSubmissions(userId: string): Promise<number> {
+  const queueStr = localStorage.getItem("efc_offline_sync_queue") || "[]";
+  let queue: PendingSyncItem[] = [];
+  try {
+    queue = JSON.parse(queueStr) as PendingSyncItem[];
+  } catch {
+    return 0;
+  }
+
+  if (queue.length === 0) return 0;
+
+  console.log(`Checking offline sync queue. Found ${queue.length} items.`);
+  const remainingQueue: PendingSyncItem[] = [];
+  let syncCount = 0;
+
+  for (const item of queue) {
+    try {
+      if (item.type === "writing") {
+        const { id, title, content, userId: itemUserId, userName, type: submissionType, promptId } = item.data;
+        await setDoc(doc(db, "writings", id), {
+          id,
+          title,
+          content,
+          userId: itemUserId,
+          userName,
+          timestamp: item.timestamp,
+          type: submissionType,
+          promptId,
+          status: "pending",
+          commentsCount: 0,
+          likesCount: 0,
+          likes: []
+        });
+        syncCount++;
+      } else if (item.type === "speaking") {
+        const { id, promptText, audioUrl, userId: itemUserId, userName, transcript } = item.data;
+        await setDoc(doc(db, "speakingSubmissions", id), {
+          id,
+          promptText,
+          audioUrl,
+          userId: itemUserId,
+          userName,
+          timestamp: item.timestamp,
+          status: "pending",
+          commentsCount: 0,
+          likesCount: 0,
+          likes: [],
+          transcript
+        });
+        syncCount++;
+      }
+    } catch (err) {
+      console.warn("Sync failed for item:", item.id, err);
+      remainingQueue.push(item);
+    }
+  }
+
+  localStorage.setItem("efc_offline_sync_queue", JSON.stringify(remainingQueue));
+  return syncCount;
+}
+
 // User management
 export function isAdminEmail(email: string): boolean {
   if (!email) return false;
@@ -609,8 +699,8 @@ export async function submitWriting(
     try {
       await setDoc(doc(db, "writings", id), submission);
     } catch (err) {
-      console.error("Firestore write essay failed:", err);
-      throw new Error("Failed to save writing assignment to Firestore. Please check your internet connection.");
+      console.warn("Firestore write essay failed due to offline/network. Queueing offline...", err);
+      queueOfflineSubmission("writing", { id, title, content, userId, userName, type, promptId });
     }
   } else {
     console.log("Demo user detected, bypassing Firestore write for writing submission.");
@@ -727,7 +817,8 @@ export async function submitSpeaking(
   promptText: string,
   audioUrl: string, // Base64 Audio URI
   userId: string,
-  userName: string
+  userName: string,
+  transcript?: string
 ): Promise<string> {
   const id = "speak_" + Math.random().toString(36).substr(2, 9);
   const submission: SpeakingSubmission = {
@@ -740,15 +831,16 @@ export async function submitSpeaking(
     status: "pending",
     commentsCount: 0,
     likesCount: 0,
-    likes: []
+    likes: [],
+    transcript
   };
 
   if (!userId.startsWith("demo_")) {
     try {
       await setDoc(doc(db, "speakingSubmissions", id), submission);
     } catch (err) {
-      console.error("Firestore write speaking failed:", err);
-      throw new Error("Failed to save speaking assignment to Firestore. Please check your internet connection.");
+      console.warn("Firestore write speaking failed due to offline/network. Queueing offline...", err);
+      queueOfflineSubmission("speaking", { id, promptText, audioUrl, userId, userName, transcript });
     }
   } else {
     console.log("Demo user detected, bypassing Firestore write for speaking submission.");

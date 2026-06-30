@@ -41,7 +41,7 @@ app.get("/api/health", (req, res) => {
 // AI Speaking Analysis API Route
 app.post("/api/speaking/analyze", async (req, res) => {
   try {
-    const { promptText, audioUrl } = req.body;
+    const { promptText, audioUrl, transcript } = req.body;
 
     if (!promptText) {
       return res.status(400).json({ error: "promptText is required" });
@@ -51,6 +51,10 @@ app.post("/api/speaking/analyze", async (req, res) => {
 
     const contents: any[] = [];
     let promptContent = `Please analyze this speaking practice submission for the topic: "${promptText}". `;
+
+    if (transcript) {
+      promptContent += `The student's live speech transcript recorded via Web Speech API was: "${transcript}". Please evaluate grammar, vocabulary, and sentence construction against this transcript. `;
+    }
 
     // If we have a base64 audio URL, append it as inlineData
     if (audioUrl && audioUrl.startsWith("data:")) {
@@ -78,6 +82,8 @@ app.post("/api/speaking/analyze", async (req, res) => {
     contents.push({ text: promptContent });
 
     const systemInstruction = `You are an expert English language assessor and fluency coach. Your job is to analyze speaking practice submissions and provide highly constructive, encouragement-focused automated feedback on pronunciation, fluency, vocabulary, and grammar.
+Your prompts, examples, and scoring criteria are strictly aligned with the Rwanda Education Board (REB) syllabus guidelines, with themes covering local environmental conservation (Akagera), eco-tourism, and technological innovation (Kigali Innovation City).
+
 You must return a response in strict JSON format that matches the following TypeScript structure:
 {
   "fluency": {
@@ -96,7 +102,8 @@ You must return a response in strict JSON format that matches the following Type
     "score": number, // out of 100, give a realistic grade
     "feedback": string // detailed, highly constructive, actionable coaching feedback
   },
-  "overallFeedback": string // a comprehensive encouraging summary paragraph of the speaking submission with concrete next steps
+  "overallFeedback": string, // a comprehensive encouraging summary paragraph of the speaking submission with concrete next steps
+  "voiceprintAnomalyDetected": boolean // set to true ONLY if there are sudden robotic patterns, unnatural phonetic spikes, or dramatic shifts from a student's normal human speech indicating potential use of an AI voice generator or distinct-person voice cloning.
 }
 Do not include any markdown backticks or extra text, output ONLY valid JSON.`;
 
@@ -141,9 +148,10 @@ Do not include any markdown backticks or extra text, output ONLY valid JSON.`;
               },
               required: ["score", "feedback"]
             },
-            overallFeedback: { type: Type.STRING }
+            overallFeedback: { type: Type.STRING },
+            voiceprintAnomalyDetected: { type: Type.BOOLEAN }
           },
-          required: ["fluency", "pronunciation", "vocabulary", "grammar", "overallFeedback"]
+          required: ["fluency", "pronunciation", "vocabulary", "grammar", "overallFeedback", "voiceprintAnomalyDetected"]
         }
       }
     });
@@ -154,10 +162,332 @@ Do not include any markdown backticks or extra text, output ONLY valid JSON.`;
     }
 
     const feedbackData = JSON.parse(text);
+    if (feedbackData.voiceprintAnomalyDetected) {
+      console.log(`[FLAG: VOICEPRINT_ANOMALY_DETECTED] Suspicious speaking style or robotic audio generated for student prompt: "${promptText}"`);
+    }
     return res.json(feedbackData);
   } catch (err: any) {
     console.error("Speaking analysis endpoint error:", err);
     return res.status(500).json({ error: err.message || "Failed to analyze speaking" });
+  }
+});
+
+// AI Admin/Teacher Helper: Evaluate Essay Writing
+app.post("/api/admin/evaluate-writing", async (req, res) => {
+  try {
+    const { title, content, type } = req.body;
+
+    if (!content) {
+      return res.status(400).json({ error: "content is required" });
+    }
+
+    const ai = getGeminiClient();
+
+    const systemInstruction = `You are a professional English language examiner and mentor. You evaluate student essay or letter writing submissions.
+Your prompts, examples, and scoring criteria are aligned with the Rwanda Education Board (REB) syllabus guidelines, with themes covering local environmental conservation (Akagera), eco-tourism, and technological innovation (Kigali Innovation City).
+
+Your task is to provide realistic assessment grades (0 to 25 points per section) and professional mentor feedback.
+You must return a response in strict JSON format that matches the following structure:
+{
+  "grammar": number, // score between 0 and 25 (integer)
+  "vocabulary": number, // score between 0 and 25 (integer)
+  "structure": number, // score between 0 and 25 (integer)
+  "clarity": number, // score between 0 and 25 (integer)
+  "feedback": string, // a detailed, supportive, constructive feedback summary paragraph that explains the rating and provides concrete advice for improvement
+  "plagiarismSuspected": boolean // set to true ONLY if there are sudden, unnatural spikes in vocabulary, copy-pasted internet prose, or excessively flawless adult phrasing that deviates from intermediate student capability baselines.
+}
+The feedback should be human-like, encouraging, and highly specific to the content. Do not output anything other than valid JSON.`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3.5-flash",
+      contents: `Please evaluate this student submission of type "${type || "essay"}" with title "${title || "Untitled"}":\n\n"${content}"`,
+      config: {
+        systemInstruction,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            grammar: { type: Type.INTEGER },
+            vocabulary: { type: Type.INTEGER },
+            structure: { type: Type.INTEGER },
+            clarity: { type: Type.INTEGER },
+            feedback: { type: Type.STRING },
+            plagiarismSuspected: { type: Type.BOOLEAN }
+          },
+          required: ["grammar", "vocabulary", "structure", "clarity", "feedback", "plagiarismSuspected"]
+        }
+      }
+    });
+
+    const text = response.text;
+    if (!text) {
+      throw new Error("No response from Gemini API");
+    }
+
+    const evaluation = JSON.parse(text);
+    if (evaluation.plagiarismSuspected) {
+      console.log(`[FLAG: PLAGIARISM_SUSPECTED] Unnatural vocabulary spike or copied text detected for student writing: "${title || "Untitled"}"`);
+    }
+    return res.json(evaluation);
+  } catch (err: any) {
+    console.error("Writing evaluation helper error:", err);
+    return res.status(500).json({ error: err.message || "Failed to evaluate writing submission" });
+  }
+});
+
+// AI Admin/Teacher Helper: Evaluate Speaking Practice
+app.post("/api/admin/evaluate-speaking", async (req, res) => {
+  try {
+    const { promptText, audioUrl } = req.body;
+
+    if (!promptText) {
+      return res.status(400).json({ error: "promptText is required" });
+    }
+
+    const ai = getGeminiClient();
+
+    const contents: any[] = [];
+    let speakContext = `Please assess this speaking practice on topic "${promptText}". `;
+
+    if (audioUrl && audioUrl.startsWith("data:")) {
+      try {
+        const parts = audioUrl.split(",");
+        const header = parts[0];
+        const base64Data = parts[1];
+        const mimeType = header.split(";")[0].split(":")[1] || "audio/wav";
+
+        contents.push({
+          inlineData: {
+            mimeType,
+            data: base64Data
+          }
+        });
+        speakContext += "Evaluate pronunciation, vocal fluency, grammatical flow, and word choice directly from the audio.";
+      } catch (err) {
+        console.warn("Could not parse base64 speaking audio for admin help, falling back", err);
+        speakContext += "Estimate quality based on topic and generate highly constructive guidance.";
+      }
+    } else {
+      speakContext += "Estimate quality based on topic and generate highly constructive guidance.";
+    }
+
+    contents.push({ text: speakContext });
+
+    const systemInstruction = `You are a professional IELTS or TOEFL speaking examiner. You assess student voice recordings.
+Your prompts, examples, and scoring criteria are aligned with the Rwanda Education Board (REB) syllabus guidelines, with themes covering local environmental conservation (Akagera), eco-tourism, and technological innovation (Kigali Innovation City).
+
+Your task is to analyze the pronunciation, vocal fluency, vocabulary, and grammar, and suggest a score of 0 to 25 points for each category.
+You must return a response in strict JSON format matching this structure:
+{
+  "pronunciation": number, // score between 0 and 25 (integer)
+  "fluency": number, // score between 0 and 25 (integer)
+  "vocabulary": number, // score between 0 and 25 (integer)
+  "grammar": number, // score between 0 and 25 (integer)
+  "feedback": string, // a detailed, encouraging, IELTS-style assessor feedback paragraph advising on pronunciation improvement, tempo, flow, and vocab choice
+  "voiceprintAnomalyDetected": boolean // set to true ONLY if there are robotic fluctuations, speech synthesis, or sudden shifts in voice timbre or style.
+}
+Do not output anything other than valid JSON.`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3.5-flash",
+      contents: contents,
+      config: {
+        systemInstruction,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            pronunciation: { type: Type.INTEGER },
+            fluency: { type: Type.INTEGER },
+            vocabulary: { type: Type.INTEGER },
+            grammar: { type: Type.INTEGER },
+            feedback: { type: Type.STRING },
+            voiceprintAnomalyDetected: { type: Type.BOOLEAN }
+          },
+          required: ["pronunciation", "fluency", "vocabulary", "grammar", "feedback", "voiceprintAnomalyDetected"]
+        }
+      }
+    });
+
+    const text = response.text;
+    if (!text) {
+      throw new Error("No response from Gemini API");
+    }
+
+    const evaluation = JSON.parse(text);
+    if (evaluation.voiceprintAnomalyDetected) {
+      console.log(`[FLAG: VOICEPRINT_ANOMALY_DETECTED] Suspicious student vocal or robotic timbre detected on topic: "${promptText}"`);
+    }
+    return res.json(evaluation);
+  } catch (err: any) {
+    console.error("Speaking evaluation helper error:", err);
+    return res.status(500).json({ error: err.message || "Failed to evaluate speaking submission" });
+  }
+});
+
+// Dynamic AI Language Challenge Generator for Mastery Tracker
+app.post("/api/language-tracker/generate-challenge", async (req, res) => {
+  try {
+    const { path: challengePath, currentLevel } = req.body;
+
+    if (!challengePath) {
+      return res.status(400).json({ error: "path is required ('global' | 'regional' | 'register')" });
+    }
+
+    const ai = getGeminiClient();
+
+    let targetFocus = "";
+    if (challengePath === "global") {
+      targetFocus = `CEFR Level ${currentLevel || "B2"} Grammar, syntax, collocations, inversion, or vocabulary nuance. Progressively challenge the user with academic structures suitable for this level.`;
+    } else if (challengePath === "regional") {
+      targetFocus = `Regional varieties (American English, British English, Australian English). Focus on spelling/vocabulary shifts (e.g., lift vs elevator, colour vs color, bonnet vs hood, flat vs apartment).`;
+    } else if (challengePath === "register") {
+      targetFocus = `Strategic Register switching. Focus on Formal, Informal, Business, or Technical English nuances (e.g., campaign outreach tone, formal business emails, casual volunteer slang).`;
+    }
+
+    const systemInstruction = `You are an expert English Language Professor and IELTS/CEFR Examiner.
+Your task is to generate an educational, highly engaging, and contextual multiple-choice English challenge.
+The challenge must directly target: ${targetFocus}
+
+You must return a response in strict JSON format matching this exact structure:
+{
+  "question": string, // The clear scenario, task, or question stem (e.g. "Select the word that completes the British English sentence: 'I need to put my bags in the ____ before driving.'")
+  "options": [string, string, string, string], // Exactly 4 distinct multiple-choice options
+  "correctOptionIdx": number, // The 0-based index of the correct option (integer 0 to 3)
+  "explanation": string, // A helpful, professional, encouraging explanation of why the correct option is right and why others are incorrect
+  "varietyInfo": string // Light context about the CEFR rule, regional usage, or register nuance being tested
+}
+Do not output anything other than valid JSON. Make the question highly relevant to professional development, communication, or volunteer campaigns where possible.`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3.5-flash",
+      contents: `Generate a multiple choice challenge for the path "${challengePath}" with current level indicator "${currentLevel || "intermediate"}".`,
+      config: {
+        systemInstruction,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            question: { type: Type.STRING },
+            options: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING }
+            },
+            correctOptionIdx: { type: Type.INTEGER },
+            explanation: { type: Type.STRING },
+            varietyInfo: { type: Type.STRING }
+          },
+          required: ["question", "options", "correctOptionIdx", "explanation", "varietyInfo"]
+        }
+      }
+    });
+
+    const text = response.text;
+    if (!text) {
+      throw new Error("No response from Gemini API");
+    }
+
+    const challenge = JSON.parse(text);
+    return res.json(challenge);
+  } catch (err: any) {
+    console.error("Language challenge generator error:", err);
+    return res.status(500).json({ error: err.message || "Failed to generate language challenge" });
+  }
+});
+
+// Interactive Admin AI Assistant (Co-Copilot Engine) API Route
+app.post("/api/admin/copilot", async (req, res) => {
+  try {
+    const { messages, viewport, context } = req.body;
+
+    if (!messages || !Array.isArray(messages)) {
+      return res.status(400).json({ error: "messages array is required" });
+    }
+
+    const ai = getGeminiClient();
+
+    const systemInstruction = `You are the ADMINISTRATIVE AI COPILOT & DATA ARCHITECT embedded inside our Rwandan educational campaign's Admin Dashboard. Your primary role is to act as an on-demand data analyst, report generator, and automation assistant for our platform administrators. You handle natural language database queries, summarize complex cheating investigations, and execute bulk administrative tasks.
+
+Every response you generate MUST STRICTLY align with the administrator's active viewport device context to maintain perfect fluid responsiveness.
+
+1. CONVERSATIONAL DISPLAY RULES BY DEVICE BREAKPOINT:
+The current user's viewport is: "${viewport || "desktop"}"
+
+[IF USER VIEWPORT IS "mobile"]:
+- Transform your response into a single-column, hyper-compact vertical feed.
+- Enforce extreme word economy: write in ultra-short sentences UNDER 10 WORDS.
+- Use simple, fragment-based bullet points.
+- Never output wide tables, charts, or long paragraphs that force sideways scrolling.
+- Place immediate action buttons or confirmation triggers at the very top of the text block (e.g., **[ACTION: AUDIT REPORT]** or **[TRIGGER: BULK VERIFICATION]**).
+
+[IF USER VIEWPORT IS "tablet"]:
+- Structure your response for a slide-over modal window.
+- Organize complex data into clean, two-part horizontal pairings (e.g., **Key Label**: Value Description) using bold anchors.
+- Use horizontal divider lines (---) to cleanly separate distinct analysis points, telemetry records, or student profiles.
+
+[IF USER VIEWPORT IS "desktop"]:
+- Populate a dedicated right-side sticky panel (25% viewport width).
+- You are free to use multi-layered Markdown blocks, code snippets, structured JSON schemas, and extensive summaries.
+- Break up large operational data sets using organized tables with flexible, percentage-based column widths.
+
+2. CORE ASSISTANT CAPABILITIES & COMMAND WORKFLOWS:
+You must process and execute these core administrative workflows:
+- Natural Language Query Processing: Translate simple admin questions into structured data filters (e.g., "Show me all high-risk accounts in Gasabo district" -> compile a list of profiles where District = Gasabo and Risk Score > 75%).
+- Automated Bulk Actions: Process multi-record requests safely (e.g., "Approve all pending audio logs from GS Gisenyi with zero flags" -> output a structured verification confirmation list).
+- Case Escalation Summaries: Synthesize multiple anti-cheat flags (written plagiarism, voiceprint fraud, device/IP conflicts) into a high-density, 3-bullet brief outlining exactly why a student account is being flagged or restricted.
+
+3. SCAN-OPTIMIZED COMMUNICATIONS:
+- Every single response MUST start with a direct, upfront answer, verdict, or structural data summary in the first sentence.
+- Use bold typography (**key data indicators**) as visual anchors to allow rapid reading under 5 seconds.
+- Align all educational, geographical, and institutional terms with Rwanda Education Board (REB) naming conventions (e.g., Districts: Gasabo, Kicukiro, Nyarugenge, Rubavu, Musanze, Gicumbi, etc.; Sectors; School Names like GS Gisenyi, GS Kacyiru; Campaign Points).
+
+4. DESIGN CONFLICTS RESOLUTION:
+If a data payload or table is too large for the current screen width, automatically drop secondary columns and convert the core text into a stacked vertical layout. Readability and viewport fit on small screens always take priority over structural complexity.`;
+
+    // Stringify current viewport context to inject into prompt for immediate state awareness
+    const contextString = `
+[CURRENT VIEWPORT CONTEXT]
+Active Tab: ${context?.activeTab || "Unknown"}
+Selected Writing ID: ${context?.selectedWriting?.id || "None"}
+Selected Writing Title: "${context?.selectedWriting?.title || "None"}"
+Selected Writing Content: "${context?.selectedWriting?.content || "None"}"
+Selected Writing User Name: "${context?.selectedWriting?.userName || "None"}"
+Selected Speaking ID: ${context?.selectedSpeaking?.id || "None"}
+Selected Speaking Prompt: "${context?.selectedSpeaking?.promptText || "None"}"
+Selected Speaking User Name: "${context?.selectedSpeaking?.userName || "None"}"
+
+[CURRENT REGISTERED USERS COUNT]
+Total Users: ${context?.usersCount || 0}
+[SAFETY QUEUE PENDING ITEMS]
+Total Flagged Reports: ${context?.reportsCount || 0}
+`;
+
+    const lastMessage = messages[messages.length - 1];
+    const history = messages.slice(0, messages.length - 1).map((m: any) => ({
+      role: m.role === "assistant" ? "model" : "user",
+      parts: [{ text: m.content }]
+    }));
+
+    const fullUserPrompt = `${contextString}\n\nUser Query: ${lastMessage.content}`;
+
+    const chat = ai.chats.create({
+      model: "gemini-3.5-flash",
+      config: {
+        systemInstruction,
+        temperature: 0.7,
+      },
+      history: history
+    });
+
+    const response = await chat.sendMessage({
+      message: fullUserPrompt
+    });
+
+    const text = response.text;
+    return res.json({ text });
+  } catch (err: any) {
+    console.error("Admin copilot error:", err);
+    return res.status(500).json({ error: err.message || "Failed to process copilot query" });
   }
 });
 

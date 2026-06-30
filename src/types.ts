@@ -102,6 +102,7 @@ export interface SpeakingSubmission {
   commentsCount: number;
   likesCount: number;
   likes: string[];
+  transcript?: string;
 }
 
 export interface Lesson {

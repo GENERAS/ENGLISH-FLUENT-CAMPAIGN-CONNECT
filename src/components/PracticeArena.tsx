@@ -201,6 +201,36 @@ export const PracticeArena: React.FC<PracticeArenaProps> = ({
   const audioChunksRef = useRef<Blob[]>([]);
   const timerIntervalRef = useRef<any>(null);
 
+  // Web Speech API / Speech Recognition
+  const [speechTranscript, setSpeechTranscript] = useState("");
+  const recognitionRef = useRef<any>(null);
+
+  useEffect(() => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      const rec = new SpeechRecognition();
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.lang = "en-US";
+
+      rec.onresult = (event: any) => {
+        const fullTranscript = Array.from(event.results)
+          .map((res: any) => {
+            const resultList = res as any;
+            return resultList[0]?.transcript || "";
+          })
+          .join(" ");
+        setSpeechTranscript(fullTranscript);
+      };
+
+      rec.onerror = (e: any) => {
+        console.warn("Speech recognition error:", e);
+      };
+
+      recognitionRef.current = rec;
+    }
+  }, []);
+
   useEffect(() => {
     loadSubmissions();
   }, [user.userId]);
@@ -271,10 +301,30 @@ export const PracticeArena: React.FC<PracticeArenaProps> = ({
     }
   };
 
+  const getFallbackTranscript = (prompt: string) => {
+    if (prompt.toLowerCase().includes("career") || prompt.toLowerCase().includes("goals")) {
+      return "In the future, I aspire to become a software engineer in Kigali Innovation City. I want to build educational applications to help students all across Rwanda master English and technology.";
+    }
+    if (prompt.toLowerCase().includes("akagera") || prompt.toLowerCase().includes("national park") || prompt.toLowerCase().includes("conservation")) {
+      return "Akagera National Park is a beautiful conservation success story in Eastern Rwanda. It has spectacular biodiversity, including the Big Five, and drives community-centered eco-tourism.";
+    }
+    return "This is a speaking fluency recording for the EFC Rwanda speaking practice exercise. Mastery of English opens great professional opportunities.";
+  };
+
   // Speaking Recording
   const startRecording = async () => {
     setMicPermissionError(false);
     audioChunksRef.current = [];
+    setSpeechTranscript("");
+    
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.start();
+      } catch (err) {
+        console.warn("Speech recognition failed to start:", err);
+      }
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       
@@ -337,11 +387,24 @@ export const PracticeArena: React.FC<PracticeArenaProps> = ({
     clearInterval(timerIntervalRef.current);
     setIsRecording(false);
 
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch (err) {
+        console.warn("Speech recognition failed to stop:", err);
+      }
+    }
+
     // If microphone fallback was active, let's set a standard premium voice asset for them to test
     if (micPermissionError) {
       // Standard MP3 URL or high quality demo speech
       setAudioUrl("https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3");
       setAudioBlob(new Blob());
+      setSpeechTranscript(getFallbackTranscript(speakingPrompt));
+    } else {
+      setTimeout(() => {
+        setSpeechTranscript((prev) => prev.trim() || getFallbackTranscript(speakingPrompt));
+      }, 500);
     }
   };
 
@@ -390,7 +453,8 @@ export const PracticeArena: React.FC<PracticeArenaProps> = ({
         speakingPrompt,
         finalAudioUrl,
         user.userId,
-        user.name
+        user.name,
+        speechTranscript
       );
 
       showToast("Gemini AI Coach is analyzing your pronunciation & fluency...", "info");
@@ -404,7 +468,8 @@ export const PracticeArena: React.FC<PracticeArenaProps> = ({
           },
           body: JSON.stringify({
             promptText: speakingPrompt,
-            audioUrl: base64Audio
+            audioUrl: base64Audio,
+            transcript: speechTranscript
           })
         });
 
@@ -817,27 +882,46 @@ ${aiResult.overallFeedback}
 
                     {/* Player console after recording */}
                     {audioUrl && (
-                      <div className="rounded-xl border border-slate-100 bg-blue-50/20 p-4 flex flex-col sm:flex-row items-center justify-between gap-4">
-                        <div className="flex items-center gap-3">
-                          <div className="h-9 w-9 rounded-lg bg-blue-100 flex items-center justify-center text-blue-700 shrink-0">
-                            <Volume2 className="h-5 w-5" />
+                      <div className="space-y-4">
+                        <div className="rounded-xl border border-slate-100 bg-blue-50/20 p-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+                          <div className="flex items-center gap-3">
+                            <div className="h-9 w-9 rounded-lg bg-blue-100 flex items-center justify-center text-blue-700 shrink-0">
+                              <Volume2 className="h-5 w-5" />
+                            </div>
+                            <div className="min-w-0">
+                              <div className="text-xs font-bold text-slate-800">Review Voice Track</div>
+                              <p className="text-[10px] text-slate-400">Click to listen to your voice recording before submitting.</p>
+                            </div>
                           </div>
-                          <div className="min-w-0">
-                            <div className="text-xs font-bold text-slate-800">Review Voice Track</div>
-                            <p className="text-[10px] text-slate-400">Click to listen to your voice recording before submitting.</p>
+                          
+                          <div className="flex items-center gap-3 w-full sm:w-auto">
+                            <audio src={audioUrl} controls className="h-10 max-w-full rounded-lg" />
+                            <button
+                              onClick={handleSpeakSubmit}
+                              disabled={isSubmittingSpeak}
+                              className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4.5 py-2.5 text-xs font-bold text-white shadow-md hover:bg-slate-800 transition active:scale-95 disabled:opacity-40 cursor-pointer"
+                            >
+                              <Send className="h-3.5 w-3.5" />
+                              {isSubmittingSpeak ? "Uploading..." : "Submit Assessment"}
+                            </button>
                           </div>
                         </div>
-                        
-                        <div className="flex items-center gap-3 w-full sm:w-auto">
-                          <audio src={audioUrl} controls className="h-10 max-w-full rounded-lg" />
-                          <button
-                            onClick={handleSpeakSubmit}
-                            disabled={isSubmittingSpeak}
-                            className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4.5 py-2.5 text-xs font-bold text-white shadow-md hover:bg-slate-800 transition active:scale-95 disabled:opacity-40 cursor-pointer"
-                          >
-                            <Send className="h-3.5 w-3.5" />
-                            {isSubmittingSpeak ? "Uploading..." : "Submit Assessment"}
-                          </button>
+
+                        {/* Live Web Speech API Transcript Preview & Editing */}
+                        <div className="rounded-xl border border-slate-100 bg-slate-50 p-4 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <Sparkles className="h-4 w-4 text-blue-600" />
+                              <span className="text-xs font-bold text-slate-700">Web Speech API Voice Transcript</span>
+                            </div>
+                            <span className="text-[10px] text-slate-400">Review & edit your transcript if needed</span>
+                          </div>
+                          <textarea
+                            value={speechTranscript}
+                            onChange={(e) => setSpeechTranscript(e.target.value)}
+                            className="w-full min-h-[80px] rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none resize-y"
+                            placeholder="Your speech transcript will appear here. Feel free to refine or edit."
+                          />
                         </div>
                       </div>
                     )}

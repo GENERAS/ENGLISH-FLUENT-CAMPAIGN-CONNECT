@@ -1988,6 +1988,10 @@ export const LearningHub: React.FC<LearningHubProps> = ({ user, onSelectPrompt, 
                         <button
                           onClick={async () => {
                             if (!selectedCustomLesson) return;
+                            if (selectedCustomLesson.category === "grammar" && !customChecked) {
+                              showToast("Passive attendance denied! You must complete the interactive Quick Check exercise first.", "error");
+                              return;
+                            }
                             try {
                               await completeLesson(user.userId, selectedCustomLesson.id);
                               if (!completedLessonIds.includes(selectedCustomLesson.id)) {

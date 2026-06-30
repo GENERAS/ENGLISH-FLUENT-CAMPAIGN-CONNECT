@@ -6,6 +6,7 @@ import { useToast } from "./Toast";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { RewardAnimation } from "./RewardAnimation";
 import { jsPDF } from "jspdf";
+import { LanguageMasteryTracker } from "./LanguageMasteryTracker";
 
 interface UserProfileProgressProps {
   user: UserProfile;
@@ -686,6 +687,9 @@ export const UserProfileProgress: React.FC<UserProfileProgressProps> = ({
               );
             })}
           </div>
+
+          {/* AI Language Mastery Tracker & CEFR Board */}
+          <LanguageMasteryTracker user={user} onUserUpdate={onUserUpdate} />
 
           {/* Badges System */}
           <div className="rounded-2xl border border-slate-100 bg-white p-6 sm:p-8 sleek-shadow space-y-4">

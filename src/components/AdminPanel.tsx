@@ -13,7 +13,14 @@ import {
   Calendar,
   Send,
   Trash,
-  Trophy
+  Trophy,
+  MessageSquare,
+  Bot,
+  ChevronDown,
+  ChevronUp,
+  X,
+  Activity,
+  Terminal
 } from "lucide-react";
 import {
   UserProfile,
@@ -141,6 +148,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ user, logoUrl = "", onLo
   const [speakFeedback, setSpeakFeedback] = useState("");
   const [speakScores, setSpeakScores] = useState({ pronunciation: 20, fluency: 20, vocabulary: 20, grammar: 20 });
   const [isSubmittingGrade, setIsSubmittingGrade] = useState(false);
+  const [isAiEvaluating, setIsAiEvaluating] = useState(false);
 
   // Users & Reports
   const [usersList, setUsersList] = useState<UserProfile[]>([]);
@@ -175,6 +183,110 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ user, logoUrl = "", onLo
   const [spotlightReasonText, setSpotlightReasonText] = useState("");
   const [spotlightWeekText, setSpotlightWeekText] = useState("");
   const [isSubmittingSpotlight, setIsSubmittingSpotlight] = useState(false);
+
+  // Admin Co-Copilot State
+  const [isCopilotOpen, setIsCopilotOpen] = useState(false);
+  const [copilotInput, setCopilotInput] = useState("");
+  const [copilotMessages, setCopilotMessages] = useState<Array<{ role: "user" | "assistant"; content: string }>>([
+    {
+      role: "assistant",
+      content: "**[STATUS: SECURE | RISK: 0%]**\n\nGreetings, operational leader. I am the **EFC Campaign Co-Founder AI & Operations Architect**.\n\nI maintain full context of your viewport (including active submissions, users roster, and moderation flags).\n\nHow can I assist you with district aggregates, student fraud telemetry, or interface recommendations today?"
+    }
+  ]);
+  const [isCopilotLoading, setIsCopilotLoading] = useState(false);
+
+  const handleSendCopilotMessage = async (e?: React.FormEvent, customText?: string) => {
+    if (e) e.preventDefault();
+    const textToSend = customText || copilotInput;
+    if (!textToSend.trim() || isCopilotLoading) return;
+
+    const newUserMessage = { role: "user" as const, content: textToSend.trim() };
+    const updatedMessages = [...copilotMessages, newUserMessage];
+    
+    setCopilotMessages(updatedMessages);
+    if (!customText) setCopilotInput("");
+    setIsCopilotLoading(true);
+
+    try {
+      let viewport: "mobile" | "tablet" | "desktop" = "desktop";
+      const width = window.innerWidth;
+      if (width < 640) {
+        viewport = "mobile";
+      } else if (width <= 1024) {
+        viewport = "tablet";
+      }
+
+      const context = {
+        activeTab,
+        selectedWriting,
+        selectedSpeaking,
+        usersCount: usersList.length,
+        reportsCount: reportsList.length
+      };
+
+      const res = await fetch("/api/admin/copilot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: updatedMessages,
+          viewport,
+          context
+        })
+      });
+
+      if (!res.ok) {
+        throw new Error("Failed to communicate with Co-Copilot");
+      }
+
+      const data = await res.json();
+      setCopilotMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: data.text || "I was unable to formulate an operations response." }
+      ]);
+    } catch (err) {
+      console.error("Co-Copilot error:", err);
+      setCopilotMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: "**[STATUS: ERROR]**\n\nFailed to establish contact with the Operations server. Please ensure the dev server is fully loaded." }
+      ]);
+    } finally {
+      setIsCopilotLoading(false);
+    }
+  };
+
+  const renderAssistantContent = (content: string) => {
+    const blocks = content.split("---");
+    return blocks.map((block, i) => {
+      const paragraphs = block.trim().split("\n\n");
+      return (
+        <div key={i} className="space-y-2">
+          {paragraphs.map((para, j) => {
+            if (para.startsWith("**[STATUS:") || para.startsWith("[STATUS:")) {
+              return (
+                <p key={j} className="text-xs font-extrabold text-blue-700 tracking-wide border-b border-blue-100/50 pb-1 mb-2">
+                  {para.replace(/\*\*/g, "")}
+                </p>
+              );
+            }
+            // Parse inline bold tags **
+            const parts = para.split("**");
+            return (
+              <p key={j} className="text-xs text-slate-700 leading-relaxed font-normal">
+                {parts.map((part, idx) =>
+                  idx % 2 === 1 ? (
+                    <strong key={idx} className="font-extrabold text-slate-900">{part}</strong>
+                  ) : (
+                    part
+                  )
+                )}
+              </p>
+            );
+          })}
+          {i < blocks.length - 1 && <hr className="my-3 border-slate-200" />}
+        </div>
+      );
+    });
+  };
 
   useEffect(() => {
     loadAdminData();
@@ -341,6 +453,77 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ user, logoUrl = "", onLo
       showToast("Failed to grade voice submission.", "error");
     } finally {
       setIsSubmittingGrade(false);
+    }
+  };
+
+  // AI-Assisted Writing Assessment Helper
+  const handleAiEvaluateWriting = async () => {
+    if (!selectedWriting) return;
+    setIsAiEvaluating(true);
+    try {
+      const response = await fetch("/api/admin/evaluate-writing", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: selectedWriting.title,
+          content: selectedWriting.content,
+          type: selectedWriting.type || "essay",
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("AI Writing evaluation failed");
+      }
+
+      const data = await response.json();
+      setWriteScores({
+        grammar: Math.min(25, Math.max(0, data.grammar ?? 20)),
+        vocabulary: Math.min(25, Math.max(0, data.vocabulary ?? 20)),
+        structure: Math.min(25, Math.max(0, data.structure ?? 20)),
+        clarity: Math.min(25, Math.max(0, data.clarity ?? 20)),
+      });
+      setWriteFeedback(data.feedback || "");
+      showToast("AI suggested review and scores loaded successfully!", "success");
+    } catch (err) {
+      console.error("AI writing assessment error:", err);
+      showToast("AI feedback generation failed. Please proceed with manual grading.", "error");
+    } finally {
+      setIsAiEvaluating(false);
+    }
+  };
+
+  // AI-Assisted Speaking Assessment Helper
+  const handleAiEvaluateSpeaking = async () => {
+    if (!selectedSpeaking) return;
+    setIsAiEvaluating(true);
+    try {
+      const response = await fetch("/api/admin/evaluate-speaking", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          promptText: selectedSpeaking.promptText,
+          audioUrl: selectedSpeaking.audioUrl,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("AI Speaking evaluation failed");
+      }
+
+      const data = await response.json();
+      setSpeakScores({
+        pronunciation: Math.min(25, Math.max(0, data.pronunciation ?? 20)),
+        fluency: Math.min(25, Math.max(0, data.fluency ?? 20)),
+        vocabulary: Math.min(25, Math.max(0, data.vocabulary ?? 20)),
+        grammar: Math.min(25, Math.max(0, data.grammar ?? 20)),
+      });
+      setSpeakFeedback(data.feedback || "");
+      showToast("AI Suggested ratings and feedback generated! Adjust as needed.", "success");
+    } catch (err) {
+      console.error("AI speaking assessment error:", err);
+      showToast("AI voice analysis failed. Please proceed with manual grading.", "error");
+    } finally {
+      setIsAiEvaluating(false);
     }
   };
 
@@ -625,10 +808,21 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ user, logoUrl = "", onLo
             <div className="lg:col-span-7">
               {selectedWriting ? (
                 <div className="rounded-2xl border border-slate-100 bg-white p-6 sleek-shadow space-y-5">
-                  <div className="border-b border-slate-100 pb-3">
-                    <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Evaluate Essay</h3>
-                    <h4 className="text-lg font-bold text-blue-600 mt-1">{selectedWriting.title}</h4>
-                    <span className="text-[11px] text-slate-400">Authored by {selectedWriting.userName}</span>
+                  <div className="border-b border-slate-100 pb-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Evaluate Essay</h3>
+                      <h4 className="text-lg font-bold text-blue-600 mt-1">{selectedWriting.title}</h4>
+                      <span className="text-[11px] text-slate-400">Authored by {selectedWriting.userName}</span>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={isAiEvaluating}
+                      onClick={handleAiEvaluateWriting}
+                      className="shrink-0 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl border border-blue-100 bg-blue-50/50 hover:bg-blue-50 text-blue-700 font-extrabold text-xs transition active:scale-95 disabled:opacity-50 cursor-pointer"
+                    >
+                      <Sparkles className={`h-3.5 w-3.5 text-blue-500 ${isAiEvaluating ? 'animate-spin' : ''}`} />
+                      <span>{isAiEvaluating ? "AI Estimating..." : "Suggest AI Rating"}</span>
+                    </button>
                   </div>
 
                   <div className="bg-slate-50 rounded-xl p-4 border border-slate-100/50 text-xs text-slate-600 leading-relaxed font-sans max-h-[180px] overflow-y-auto whitespace-pre-wrap">
@@ -697,10 +891,21 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ user, logoUrl = "", onLo
                 </div>
               ) : selectedSpeaking ? (
                 <div className="rounded-2xl border border-slate-100 bg-white p-6 sleek-shadow space-y-5">
-                  <div className="border-b border-slate-100 pb-3">
-                    <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Evaluate Pronunciation</h3>
-                    <h4 className="text-lg font-bold text-blue-600 mt-1">{selectedSpeaking.promptText}</h4>
-                    <span className="text-[11px] text-slate-400">Submitted by {selectedSpeaking.userName}</span>
+                  <div className="border-b border-slate-100 pb-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Evaluate Pronunciation</h3>
+                      <h4 className="text-lg font-bold text-blue-600 mt-1">{selectedSpeaking.promptText}</h4>
+                      <span className="text-[11px] text-slate-400">Submitted by {selectedSpeaking.userName}</span>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={isAiEvaluating}
+                      onClick={handleAiEvaluateSpeaking}
+                      className="shrink-0 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl border border-blue-100 bg-blue-50/50 hover:bg-blue-50 text-blue-700 font-extrabold text-xs transition active:scale-95 disabled:opacity-50 cursor-pointer"
+                    >
+                      <Sparkles className={`h-3.5 w-3.5 text-blue-500 ${isAiEvaluating ? 'animate-spin' : ''}`} />
+                      <span>{isAiEvaluating ? "AI Estimating..." : "Suggest AI Rating"}</span>
+                    </button>
                   </div>
 
                   {/* Audio Player */}
@@ -1871,6 +2076,155 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ user, logoUrl = "", onLo
             </div>
           </div>
         )}
+      </div>
+
+      {/* Interactive Admin AI Assistant (Co-Copilot Engine) */}
+      <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end">
+        {isCopilotOpen ? (
+          <div className="mb-4 w-[340px] sm:w-[400px] h-[500px] bg-white rounded-2xl border border-slate-200/80 shadow-2xl flex flex-col overflow-hidden animate-in fade-in slide-in-from-bottom-5 duration-300">
+            {/* Header */}
+            <div className="bg-slate-950 text-white p-4 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                <div>
+                  <h4 className="text-xs font-bold flex items-center gap-1.5 text-slate-100 uppercase tracking-widest">
+                    <Bot className="h-4 w-4 text-blue-400" />
+                    Operations Co-Copilot
+                  </h4>
+                  <p className="text-[10px] text-slate-400 font-medium">Technical Co-Founder AI</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsCopilotOpen(false)}
+                className="text-slate-400 hover:text-white transition cursor-pointer p-1 rounded-lg hover:bg-slate-900"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Context Awareness Status Banner */}
+            <div className="bg-blue-50/70 border-b border-blue-100 px-4 py-2 flex items-center justify-between text-[10px] font-semibold text-blue-700">
+              <span className="flex items-center gap-1.5 truncate">
+                <Activity className="h-3.5 w-3.5 animate-pulse text-blue-600 flex-shrink-0" />
+                {selectedWriting ? (
+                  <span>Reviewing Essay: <strong className="text-blue-950 truncate font-extrabold">"{selectedWriting.title}"</strong></span>
+                ) : selectedSpeaking ? (
+                  <span>Reviewing Audio: <strong className="text-blue-950 truncate font-extrabold">"{selectedSpeaking.userName}"</strong></span>
+                ) : (
+                  <span>Active Workspace: <strong className="text-blue-950 uppercase font-extrabold">{activeTab} tab</strong></span>
+                )}
+              </span>
+              <span className="text-[9px] font-mono bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded flex-shrink-0">
+                REB Context API v3.5
+              </span>
+            </div>
+
+            {/* Message History */}
+            <div className="flex-1 p-4 overflow-y-auto space-y-4 bg-slate-50/50">
+              {copilotMessages.map((msg, index) => (
+                <div
+                  key={index}
+                  className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+                >
+                  <div
+                    className={`max-w-[85%] rounded-2xl p-3 text-xs leading-relaxed shadow-xs ${
+                      msg.role === "user"
+                        ? "bg-slate-900 text-slate-50 rounded-br-none ml-6 font-medium"
+                        : "bg-white border border-slate-200/80 text-slate-800 rounded-bl-none mr-6 space-y-2 animate-in fade-in-50"
+                    }`}
+                  >
+                    {msg.role === "user" ? (
+                      <p>{msg.content}</p>
+                    ) : (
+                      renderAssistantContent(msg.content)
+                    )}
+                  </div>
+                </div>
+              ))}
+              {isCopilotLoading && (
+                <div className="flex justify-start">
+                  <div className="bg-white border border-slate-100 rounded-2xl p-3 max-w-[85%] rounded-bl-none shadow-xs mr-6 flex items-center gap-2 text-xs text-slate-500 animate-pulse">
+                    <div className="h-4 w-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+                    <span>Auditing telemetry metrics...</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Suggestion Chips */}
+            <div className="px-3 py-1.5 bg-slate-50 border-t border-slate-100 flex gap-1.5 overflow-x-auto whitespace-nowrap scrollbar-none">
+              {selectedWriting && (
+                <button
+                  onClick={() => handleSendCopilotMessage(undefined, "Summarize why this student's written submission is flagged or needs review.")}
+                  className="px-2.5 py-1 text-[10px] font-bold rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 cursor-pointer flex-shrink-0"
+                >
+                  Summarize Active Essay
+                </button>
+              )}
+              {selectedSpeaking && (
+                <button
+                  onClick={() => handleSendCopilotMessage(undefined, "Audit this student's voice transcription for any potential fraud or inconsistency.")}
+                  className="px-2.5 py-1 text-[10px] font-bold rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 cursor-pointer flex-shrink-0"
+                >
+                  Audit Speaking Transcription
+                </button>
+              )}
+              {activeTab === "moderation" && (
+                <button
+                  onClick={() => handleSendCopilotMessage(undefined, "Analyze the pending safety flags queue and flag any immediate risks.")}
+                  className="px-2.5 py-1 text-[10px] font-bold rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 cursor-pointer flex-shrink-0"
+                >
+                  Analyze Flag Queue
+                </button>
+              )}
+              {activeTab === "users" && (
+                <button
+                  onClick={() => handleSendCopilotMessage(undefined, "Summarize user level aggregates, and list any suspicious attendance page timers.")}
+                  className="px-2.5 py-1 text-[10px] font-bold rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 cursor-pointer flex-shrink-0"
+                >
+                  Analyze Roster & Cheat Scores
+                </button>
+              )}
+              <button
+                onClick={() => handleSendCopilotMessage(undefined, "Suggest responsive layout and grid optimizations for these administrative views.")}
+                className="px-2.5 py-1 text-[10px] font-bold rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 cursor-pointer flex-shrink-0"
+              >
+                Layout Grid Suggestions
+              </button>
+            </div>
+
+            {/* Input Form */}
+            <form onSubmit={handleSendCopilotMessage} className="p-3 border-t border-slate-150 flex gap-2 bg-slate-50">
+              <input
+                type="text"
+                value={copilotInput}
+                onChange={(e) => setCopilotInput(e.target.value)}
+                placeholder="Ask technical co-founder copilot..."
+                className="flex-1 bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-blue-500"
+                disabled={isCopilotLoading}
+              />
+              <button
+                type="submit"
+                disabled={!copilotInput.trim() || isCopilotLoading}
+                className="bg-blue-600 text-white rounded-xl p-2 px-3 hover:bg-blue-500 disabled:opacity-40 transition-colors cursor-pointer flex items-center justify-center"
+              >
+                <Send className="h-3.5 w-3.5" />
+              </button>
+            </form>
+          </div>
+        ) : null}
+
+        {/* Floating Bubble Trigger */}
+        <button
+          onClick={() => setIsCopilotOpen(!isCopilotOpen)}
+          className="rounded-full bg-slate-950 text-white p-3.5 sm:p-4 shadow-xl hover:bg-slate-900 transition-all hover:scale-105 active:scale-95 flex items-center gap-2 cursor-pointer border border-slate-800"
+        >
+          <div className="relative">
+            <Bot className="h-5 w-5 text-blue-400" />
+            <div className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-emerald-500 border border-slate-950" />
+          </div>
+          <span className="text-xs font-bold pr-1">Co-Copilot Engine</span>
+        </button>
       </div>
     </div>
   );

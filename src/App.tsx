@@ -14,7 +14,8 @@ import {
   getWritings,
   getSpeakingSubmissions,
   getGlobalSettings,
-  isAdminEmail
+  isAdminEmail,
+  syncPendingSubmissions
 } from "./firebase-utils";
 import { seedDatabaseIfNeeded } from "./seed";
 import { UserProfile, WritingSubmission, SpeakingSubmission } from "./types";
@@ -114,6 +115,45 @@ function AppContent() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
+  // 1b. Offline Sync Queue synchronizer
+  useEffect(() => {
+    const handleOnlineSync = () => {
+      if (userProfile && !userProfile.userId.startsWith("demo_")) {
+        syncPendingSubmissions(userProfile.userId).then((count) => {
+          if (count > 0) {
+            showToast(`Synchronized ${count} pending offline submissions to the cloud!`, "success");
+            loadProfileSubmissions(userProfile.userId);
+          }
+        }).catch((err) => {
+          console.warn("Failed background offline sync:", err);
+        });
+      }
+    };
+
+    window.addEventListener("online", handleOnlineSync);
+    
+    // Auto sync on mount if online
+    if (typeof navigator !== "undefined" && navigator.onLine && userProfile) {
+      handleOnlineSync();
+    }
+
+    return () => {
+      window.removeEventListener("online", handleOnlineSync);
+    };
+  }, [userProfile]);
+
+  const redirectUserByRole = (profile: UserProfile, force: boolean = false) => {
+    if (profile.role === "admin") {
+      setActiveTab("admin");
+    } else if (profile.role === "teacher") {
+      setActiveTab("teacher");
+    } else {
+      if (force) {
+        setActiveTab("learning");
+      }
+    }
+  };
+
   // 2. Auth State Listening with Self-Healing Backup
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (authUser) => {
@@ -137,6 +177,9 @@ function AppContent() {
           if (profile) {
             setUserProfile(profile);
             loadProfileSubmissions(profile.userId);
+            if (activeTab === "landing") {
+              redirectUserByRole(profile);
+            }
           } else {
             setUserProfile(null);
           }
@@ -231,8 +274,8 @@ function AppContent() {
         
         setUserProfile(profile);
         setShowAuthDialog(false);
-        setActiveTab("learning"); // Redirect to classroom
-        showToast(`Congratulations ${profile.name}! Your student account is ready.`, "success");
+        redirectUserByRole(profile, true);
+        showToast(`Congratulations ${profile.name}! Your account is ready.`, "success");
       } else {
         if (!authEmail || !authPassword) {
           setAuthError("Email and password are required.");
@@ -285,7 +328,7 @@ function AppContent() {
           
           setUserProfile(profile);
           setShowAuthDialog(false);
-          setActiveTab("learning");
+          redirectUserByRole(profile, true);
           showToast(`Welcome back! Logged in via sandbox profile fallback.`, "success");
           return;
         }
@@ -308,7 +351,7 @@ function AppContent() {
           setUserProfile(profile);
           loadProfileSubmissions(profile.userId);
           setShowAuthDialog(false);
-          setActiveTab("learning");
+          redirectUserByRole(profile, true);
           showToast(`Welcome back, ${profile.name}!`, "success");
         } else {
           setAuthError("Profile details not found in database.");
@@ -358,7 +401,7 @@ function AppContent() {
         setUserProfile(profile);
         loadProfileSubmissions(profile.userId);
         setShowAuthDialog(false);
-        setActiveTab("learning");
+        redirectUserByRole(profile, true);
         showToast(`Signed in successfully with Google! Welcome ${profile.name}`, "success");
       }
     } catch (err: any) {
