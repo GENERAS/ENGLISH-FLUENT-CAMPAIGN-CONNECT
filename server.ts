@@ -108,7 +108,7 @@ You must return a response in strict JSON format that matches the following Type
 Do not include any markdown backticks or extra text, output ONLY valid JSON.`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: contents,
       config: {
         systemInstruction,
@@ -199,7 +199,7 @@ You must return a response in strict JSON format that matches the following stru
 The feedback should be human-like, encouraging, and highly specific to the content. Do not output anything other than valid JSON.`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: `Please evaluate this student submission of type "${type || "essay"}" with title "${title || "Untitled"}":\n\n"${content}"`,
       config: {
         systemInstruction,
@@ -289,7 +289,7 @@ You must return a response in strict JSON format matching this structure:
 Do not output anything other than valid JSON.`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: contents,
       config: {
         systemInstruction,
@@ -360,7 +360,7 @@ You must return a response in strict JSON format matching this exact structure:
 Do not output anything other than valid JSON. Make the question highly relevant to professional development, communication, or volunteer campaigns where possible.`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: `Generate a multiple choice challenge for the path "${challengePath}" with current level indicator "${currentLevel || "intermediate"}".`,
       config: {
         systemInstruction,
@@ -471,7 +471,7 @@ Total Flagged Reports: ${context?.reportsCount || 0}
     const fullUserPrompt = `${contextString}\n\nUser Query: ${lastMessage.content}`;
 
     const chat = ai.chats.create({
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       config: {
         systemInstruction,
         temperature: 0.7,
@@ -514,7 +514,7 @@ Return a JSON object with this exact structure:
 }`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: `Student is working on a ${submissionType || 'speaking/writing'} task. 
 Prompt: "${promptText || 'N/A'}"
 Student asks: "${question}"`,
@@ -561,7 +561,7 @@ Return a JSON object with this exact structure:
 }`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: `Challenge: "${challenge}"
 Student Answer: "${answer || ''}"`,
       config: {
@@ -589,29 +589,30 @@ Student Answer: "${answer || ''}"`,
 // AI LISTENING PRACTICE LESSON GENERATOR
 app.post("/api/listening/generate-questions", async (req, res) => {
   try {
-    const { youtubeUrl, topicOrDescription } = req.body;
-    if (!youtubeUrl) {
-      return res.status(400).json({ error: "youtubeUrl is required" });
+    const { youtubeUrl, audioUrl, topicOrDescription } = req.body;
+    if (!youtubeUrl && !audioUrl) {
+      return res.status(400).json({ error: "Either youtubeUrl or audioUrl is required" });
     }
 
     const ai = getGeminiClient();
+    const mediaSource = youtubeUrl ? `YouTube Video: "${youtubeUrl}"` : `Uploaded Podcast Audio file: "${audioUrl}"`;
     const systemInstruction = `You are an AI Curriculum Designer for EFC Rwanda. 
-Prepare a high-quality listening practice lesson based on the provided video description or topic: "${topicOrDescription || 'General English listening podcast'}".
-The video is hosted on YouTube: "${youtubeUrl}".
+Prepare a high-quality listening practice lesson based on the provided video/podcast description or topic: "${topicOrDescription || 'General English listening podcast'}".
+The media is sourced from: ${mediaSource}.
 Choose if students should answer by "writing" an essay/summary or by "speaking" their answers (depending on what makes the lesson most effective).
 Create 3 specific, deep listening comprehension questions based on the topic.
 
 Return a JSON object with this exact structure:
 {
   "title": string, // Catchy, relevant title (e.g., "Eco-Tourism in Akagera: Wildlife Recovery")
-  "instructions": string, // Detailed instructions on what to listen for (e.g., "Watch the documentary on Rwanda's conservation success. Pay attention to how community incentives reduced poaching.")
-  "questionText": string, // The numbered questions students must answer after watching
+  "instructions": string, // Detailed instructions on what to listen for (e.g., "Watch the documentary or listen to the podcast on Rwanda's conservation success. Pay attention to how community incentives reduced poaching.")
+  "questionText": string, // The numbered questions students must answer after watching/listening
   "submissionType": string // MUST be either "writing" or "speaking"
 }`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: `Create a listening lesson for: "${topicOrDescription || 'General English podcast'}". Video URL: ${youtubeUrl}`,
+      model: "gemini-2.5-flash",
+      contents: `Create a listening lesson for: "${topicOrDescription || 'General English podcast'}". Sourced from: ${mediaSource}`,
       config: {
         systemInstruction,
         responseMimeType: "application/json",
@@ -633,6 +634,95 @@ Return a JSON object with this exact structure:
   } catch (err: any) {
     console.error("Listening generation API error:", err);
     return res.status(500).json({ error: err.message || "Failed to generate listening lesson" });
+  }
+});
+
+// AI GENERATE FULL PODCAST WITH AUDIO AND QUESTIONS
+app.post("/api/listening/generate-podcast", async (req, res) => {
+  try {
+    const { topic, difficulty, voiceName } = req.body;
+    if (!topic) {
+      return res.status(400).json({ error: "topic is required" });
+    }
+
+    const ai = getGeminiClient();
+
+    const systemInstruction = `You are an expert English language curriculum designer for EFC Rwanda.
+Prepare a high-quality educational listening podcast script and comprehension questions for English learners at the "${difficulty || 'Intermediate'}" CEFR level.
+The podcast topic or theme is: "${topic}".
+Design the podcast script to be an engaging monolog or speech (approx. 100-200 words long) written in highly authentic, clean English suitable for the specified CEFR level.
+Choose if students should answer by "writing" an essay/summary or by "speaking" their answers (depending on what makes the lesson most effective).
+Create 3 specific, deep listening comprehension questions based on the script.
+
+Return a JSON object with this exact structure:
+{
+  "title": string, // Catchy, relevant title (e.g., "The Coffee Farmers of Huye")
+  "script": string, // The full spoken monologue script for the podcast. This will be read out loud by AI. Keep it under 250 words.
+  "instructions": string, // Detailed instructions on what students should listen for
+  "questionText": string, // The numbered questions students must answer after listening (e.g. "1. ... \n2. ... \n3. ...")
+  "submissionType": string // MUST be either "writing" or "speaking"
+}`;
+
+    const textResponse = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: `Generate a full listening lesson and script for topic: "${topic}" at level: "${difficulty || 'Intermediate'}"`,
+      config: {
+        systemInstruction,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            title: { type: Type.STRING },
+            script: { type: Type.STRING },
+            instructions: { type: Type.STRING },
+            questionText: { type: Type.STRING },
+            submissionType: { type: Type.STRING }
+          },
+          required: ["title", "script", "instructions", "questionText", "submissionType"]
+        }
+      }
+    });
+
+    const result = JSON.parse(textResponse.text || "{}");
+    const scriptText = result.script || "";
+
+    if (!scriptText) {
+      throw new Error("Failed to generate a script for the podcast.");
+    }
+
+    // Now, call gemini-3.1-flash-tts-preview to turn this script into speech audio
+    console.log("Generating audio for script using gemini-3.1-flash-tts-preview...");
+    let audioBase64 = "";
+    try {
+      const selectedVoice = voiceName || "Zephyr"; // 'Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr'
+      const ttsResponse = await ai.models.generateContent({
+        model: "gemini-3.1-flash-tts-preview",
+        contents: [{ parts: [{ text: `Say with clarity, pacing nicely for English learners: ${scriptText}` }] }],
+        config: {
+          responseModalities: ["AUDIO"],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: selectedVoice },
+            },
+          },
+        },
+      });
+
+      const base64Data = ttsResponse.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      if (base64Data) {
+        audioBase64 = `data:audio/mp3;base64,${base64Data}`;
+      }
+    } catch (ttsErr: any) {
+      console.error("TTS generation failed, but script was generated:", ttsErr);
+    }
+
+    return res.json({
+      ...result,
+      audioBase64
+    });
+  } catch (err: any) {
+    console.error("Podcast generation API error:", err);
+    return res.status(500).json({ error: err.message || "Failed to generate podcast" });
   }
 });
 
@@ -659,7 +749,7 @@ Return a JSON object with this exact structure:
     }
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: `Student response: "${studentWork}"
 Questions: "${questionText}"`,
       config: {

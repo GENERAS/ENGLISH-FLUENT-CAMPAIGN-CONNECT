@@ -5,7 +5,8 @@ import {
   signOut,
   onAuthStateChanged,
   GoogleAuthProvider,
-  signInWithPopup
+  signInWithPopup,
+  signInAnonymously
 } from "firebase/auth";
 import { auth } from "./firebase";
 import {
@@ -227,10 +228,10 @@ function AppContent() {
         // Auto-assign admin role to the super admin email
         const finalRole = isAdminEmail(authEmail) ? "admin" : authRole;
 
-        // Register User in Auth with 2-second safety timeout
+        // Register User in Auth with 15-second safety timeout
         const authPromise = createUserWithEmailAndPassword(auth, authEmail, authPassword);
         const authTimeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("Timeout")), 2000)
+          setTimeout(() => reject(new Error("Timeout")), 15000)
         );
         
         let cred;
@@ -284,10 +285,10 @@ function AppContent() {
           return;
         }
 
-        // Sign In with 2-second safety timeout
+        // Sign In with 15-second safety timeout
         const authPromise = signInWithEmailAndPassword(auth, authEmail, authPassword);
         const authTimeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("Timeout")), 2000)
+          setTimeout(() => reject(new Error("Timeout")), 15000)
         );
         
         let cred;
@@ -448,6 +449,31 @@ function AppContent() {
   const triggerSandboxLogin = async (role: "student" | "admin" | "teacher") => {
     setAuthError("");
     setIsWorkingAuth(true);
+
+    try {
+      // 1. Sign in anonymously with Firebase Auth to get a real valid auth session
+      const cred = await signInAnonymously(auth);
+      const uid = cred.user.uid;
+
+      // 2. Set up standard mock user details but with the real authenticated UID
+      const name = role === "student" ? "Marcus Vance" : role === "teacher" ? "Principal Margaret" : "Super Admin";
+      const email = role === "admin" ? "generaskagiraneza@gmail.com" : `${role}_${uid.substring(0, 5)}@campaign.edu`;
+
+      // Create/Update the profile in the Firestore database
+      const profile = await createUserProfile(uid, name, email, role, "ES Rubengera TSS");
+
+      // 3. Set the state with this profile
+      setUserProfile(profile);
+      loadProfileSubmissions(uid);
+      setShowAuthDialog(false);
+      setActiveTab(role === "student" ? "learning" : role === "admin" ? "admin" : "learning");
+      setIsWorkingAuth(false);
+      showToast(`Welcome! Loaded ${role} interactive classroom playground globally!`, "success");
+      return;
+    } catch (error) {
+      console.warn("Failed anonymous Firebase Auth sign in, falling back to fully offline sandbox mode", error);
+    }
+
     // Standard mock user details to ensure 100% stable sandbox demo within restricting iframe networks
     const demoId = "demo_" + role;
     const demoProfile: UserProfile = {

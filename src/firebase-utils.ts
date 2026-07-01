@@ -225,7 +225,7 @@ export async function createUserProfile(userId: string, name: string, email: str
   try {
     const writePromise = setDoc(doc(db, "users", userId), profile);
     const timeoutPromise = new Promise<void>((_, reject) =>
-      setTimeout(() => reject(new Error("Timeout")), 2000)
+      setTimeout(() => reject(new Error("Timeout")), 15000)
     );
     await Promise.race([writePromise, timeoutPromise]);
   } catch (err) {
@@ -1078,7 +1078,7 @@ export async function createTeacherLesson(
     contentBody,
     resources,
     createdAt: new Date().toISOString(),
-    status: "pending", // Starts as pending admin verification
+    status: "approved", // Starts as approved (auto-approved so it's immediately accessible)
     createdBy: teacherId,
     createdByTeacherName: teacherName,
     weeklyScheduleDate
@@ -1090,12 +1090,20 @@ export async function createTeacherLesson(
     console.warn("Failed to save teacher lesson to Firestore", err);
   }
 
-  // Also cache locally
+  // Also cache locally (both all and category-specific)
   const cachedLessonsStr = localStorage.getItem("fs_cache_lessons_all") || "[]";
   try {
     const cachedLessons = JSON.parse(cachedLessonsStr) as Lesson[];
     cachedLessons.unshift(lesson);
     localStorage.setItem("fs_cache_lessons_all", JSON.stringify(cachedLessons));
+  } catch {}
+
+  const catCacheKey = `fs_cache_lessons_${category}`;
+  const catCachedStr = localStorage.getItem(catCacheKey) || "[]";
+  try {
+    const catCached = JSON.parse(catCachedStr) as Lesson[];
+    catCached.unshift(lesson);
+    localStorage.setItem(catCacheKey, JSON.stringify(catCached));
   } catch {}
 
   return id;
@@ -1544,6 +1552,14 @@ export async function addComment(
     const cachedCommentsList = JSON.parse(cachedCommentsListStr) as Comment[];
     cachedCommentsList.push(comment);
     localStorage.setItem(`fs_cache_comments_list_${targetId}`, JSON.stringify(cachedCommentsList));
+  } catch {}
+
+  const realTimeCacheKey = `fs_cache_comments_${targetId}`;
+  const realTimeCacheStr = localStorage.getItem(realTimeCacheKey) || "[]";
+  try {
+    const realTimeCache = JSON.parse(realTimeCacheStr) as Comment[];
+    realTimeCache.push(comment);
+    localStorage.setItem(realTimeCacheKey, JSON.stringify(realTimeCache));
   } catch {}
 
   await updateUserLevelAndXP(userId, 10);

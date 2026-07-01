@@ -108,7 +108,8 @@ export interface SpeakingSubmission {
 export interface ListeningPractice {
   id: string;
   title: string;
-  youtubeUrl: string;
+  youtubeUrl?: string;
+  audioUrl?: string; // For uploaded podcast files
   difficultyLevel: EnglishLevel;
   instructions: string;
   questionText: string;
@@ -122,7 +123,8 @@ export interface ListeningSubmission {
   id: string;
   practiceId: string;
   practiceTitle: string;
-  youtubeUrl: string;
+  youtubeUrl?: string;
+  podcastUrl?: string; // If the practice used an uploaded podcast file
   userId: string;
   userName: string;
   submissionType: "writing" | "speaking";

@@ -33,7 +33,11 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const showToast = useCallback((message: string, type: ToastType = "info") => {
     const id = Math.random().toString(36).substring(2, 9);
-    setToasts((prev) => [...prev, { id, message, type }]);
+    
+    // Defer state update to next tick to prevent React "Cannot update a component while rendering a different component" warnings
+    setTimeout(() => {
+      setToasts((prev) => [...prev, { id, message, type }]);
+    }, 0);
 
     // Auto-remove after 4 seconds
     setTimeout(() => {

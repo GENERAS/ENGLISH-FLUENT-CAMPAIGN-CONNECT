@@ -81,7 +81,7 @@ export const CommunityDebate: React.FC<CommunityDebateProps> = ({ user }) => {
 
   const loadPeerWritings = async () => {
     try {
-      const list = await getWritings("reviewed");
+      const list = await getWritings(undefined);
       setPeerWritings(list);
     } catch (err) {
       console.error("Failed to load peer writings:", err);

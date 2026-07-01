@@ -208,12 +208,11 @@ export const LearningHub: React.FC<LearningHubProps> = ({ user, onSelectPrompt, 
           console.warn("Failed to merge offline downloaded lessons:", err);
         }
 
-        // Filter out pending lessons so only verified/approved ones are shown to students
-        const approved = list.filter(l => l.status !== "pending");
-        setCustomLessons(approved);
+        // Show all lessons, including those prepared by teachers, making them immediately accessible
+        setCustomLessons(list);
         
-        if (approved.length > 0) {
-          const firstLesson = approved[0];
+        if (list.length > 0) {
+          const firstLesson = list[0];
           setSelectedCustomLesson(firstLesson);
           if (user?.userId) {
             await enrollInLesson(user.userId, user.name, firstLesson.id, firstLesson.title);

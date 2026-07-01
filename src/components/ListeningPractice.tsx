@@ -79,6 +79,52 @@ export const ListeningPractice: React.FC<ListeningPracticeProps> = ({ user, onUs
   const [aiTopicDescription, setAiTopicDescription] = useState("");
   const [isPublishing, setIsPublishing] = useState(false);
 
+  // Podcast specific states
+  const [sourceType, setSourceType] = useState<"youtube" | "podcast" | "ai_podcast">("youtube");
+  const [podcastFile, setPodcastFile] = useState<File | null>(null);
+  const [uploadedAudioUrl, setUploadedAudioUrl] = useState("");
+  const [isUploadingPodcast, setIsUploadingPodcast] = useState(false);
+
+  // AI podcast specific states
+  const [aiVoice, setAiVoice] = useState<"Zephyr" | "Puck" | "Charon" | "Fenrir" | "Kore">("Zephyr");
+  const [aiPodcastTopic, setAiPodcastTopic] = useState("");
+  const [aiScript, setAiScript] = useState("");
+  const [isGeneratingPodcast, setIsGeneratingPodcast] = useState(false);
+
+  const base64ToBlob = (base64Data: string, contentType = "audio/mp3") => {
+    const byteCharacters = atob(base64Data.split(",")[1] || base64Data);
+    const byteNumbers = new Array(byteCharacters.length);
+    for (let i = 0; i < byteCharacters.length; i++) {
+      byteNumbers[i] = byteCharacters.charCodeAt(i);
+    }
+    const byteArray = new Uint8Array(byteNumbers);
+    return new Blob([byteArray], { type: contentType });
+  };
+
+  const handlePodcastFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    if (!file.type.startsWith("audio/")) {
+      showToast("Selected file must be an audio file (MP3, WAV, etc.)", "error");
+      return;
+    }
+    
+    setPodcastFile(file);
+    setIsUploadingPodcast(true);
+    try {
+      showToast("Uploading podcast audio track...", "info");
+      const url = await uploadAudio(file, user.userId);
+      setUploadedAudioUrl(url);
+      showToast("Podcast uploaded successfully!", "success");
+    } catch (err: any) {
+      console.error("Audio upload error:", err);
+      showToast("Failed to upload podcast audio file.", "error");
+    } finally {
+      setIsUploadingPodcast(false);
+    }
+  };
+
   // Admin/Teacher grading states
   const [gradingSubmissions, setGradingSubmissions] = useState<ListeningSubmission[]>([]);
   const [activeGradingSub, setActiveGradingSub] = useState<ListeningSubmission | null>(null);
@@ -127,9 +173,11 @@ export const ListeningPractice: React.FC<ListeningPracticeProps> = ({ user, onUs
       if (document.hidden) {
         setCheatingWarnings((prev) => {
           const next = prev + 1;
-          const logMsg = `[WARNING] ${new Date().toLocaleTimeString()}: User navigated away from the platform.`;
-          setProctorLog((logs) => [...logs, logMsg]);
-          showToast(`Anti-Cheat Warning #${next}: Navigating away from the video violates focus guidelines.`, "error");
+          setTimeout(() => {
+            const logMsg = `[WARNING] ${new Date().toLocaleTimeString()}: User navigated away from the platform.`;
+            setProctorLog((logs) => [...logs, logMsg]);
+            showToast(`Anti-Cheat Warning #${next}: Navigating away from the video violates focus guidelines.`, "error");
+          }, 0);
           return next;
         });
       }
@@ -138,9 +186,11 @@ export const ListeningPractice: React.FC<ListeningPracticeProps> = ({ user, onUs
     const handleBlur = () => {
       setCheatingWarnings((prev) => {
         const next = prev + 1;
-        const logMsg = `[WARNING] ${new Date().toLocaleTimeString()}: Browser window lost focus.`;
-        setProctorLog((logs) => [...logs, logMsg]);
-        showToast(`Anti-Cheat Focus Alert: Please focus exclusively on the video player inside EFC.`, "error");
+        setTimeout(() => {
+          const logMsg = `[WARNING] ${new Date().toLocaleTimeString()}: Browser window lost focus.`;
+          setProctorLog((logs) => [...logs, logMsg]);
+          showToast(`Anti-Cheat Focus Alert: Please focus exclusively on the video player inside EFC.`, "error");
+        }, 0);
         return next;
       });
     };
@@ -160,17 +210,26 @@ export const ListeningPractice: React.FC<ListeningPracticeProps> = ({ user, onUs
 
   // Generate Questions with Gemini AI
   const handleAiGenerateQuestions = async () => {
-    if (!newYoutubeUrl.trim()) {
+    const isYoutube = sourceType === "youtube";
+    const mediaUrl = isYoutube ? newYoutubeUrl.trim() : uploadedAudioUrl;
+
+    if (isYoutube && !newYoutubeUrl.trim()) {
       showToast("Please enter a YouTube video URL first.", "error");
       return;
     }
+    if (!isYoutube && !uploadedAudioUrl) {
+      showToast("Please select and upload a podcast file first.", "error");
+      return;
+    }
+
     setIsGeneratingAi(true);
     try {
       const response = await fetch("/api/listening/generate-questions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          youtubeUrl: newYoutubeUrl,
+          youtubeUrl: isYoutube ? mediaUrl : undefined,
+          audioUrl: !isYoutube ? mediaUrl : undefined,
           topicOrDescription: aiTopicDescription
         })
       });
@@ -180,7 +239,7 @@ export const ListeningPractice: React.FC<ListeningPracticeProps> = ({ user, onUs
         setNewInstructions(data.instructions || "");
         setNewQuestions(data.questionText || "");
         setNewSubmissionType(data.submissionType === "speaking" ? "speaking" : "writing");
-        showToast("Gemini AI has successfully designed questions from this podcast/video!", "success");
+        showToast("Gemini AI has successfully designed questions from this podcast!", "success");
       } else {
         throw new Error(data.error || "Failed to generate questions");
       }
@@ -192,11 +251,62 @@ export const ListeningPractice: React.FC<ListeningPracticeProps> = ({ user, onUs
     }
   };
 
+  // Generate full podcast script and TTS audio using Gemini
+  const handleAiGeneratePodcast = async () => {
+    if (!aiPodcastTopic.trim()) {
+      showToast("Please enter an AI Podcast topic/description.", "error");
+      return;
+    }
+
+    setIsGeneratingPodcast(true);
+    try {
+      showToast("Designing podcast script and formulating questions...", "info");
+      const response = await fetch("/api/listening/generate-podcast", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          topic: aiPodcastTopic.trim(),
+          difficulty: newDifficulty,
+          voiceName: aiVoice
+        })
+      });
+
+      const data = await response.json();
+      if (response.ok) {
+        setNewTitle(data.title || "AI Listening Podcast");
+        setNewInstructions(data.instructions || "");
+        setNewQuestions(data.questionText || "");
+        setNewSubmissionType(data.submissionType === "speaking" ? "speaking" : "writing");
+        setAiScript(data.script || "");
+
+        if (data.audioBase64) {
+          showToast("Podcast audio synthesized! Uploading track to secure cloud storage...", "info");
+          const blob = base64ToBlob(data.audioBase64);
+          const uploadedUrl = await uploadAudio(blob, user.userId);
+          setUploadedAudioUrl(uploadedUrl);
+          showToast("AI Podcast created, recorded and published internally!", "success");
+        } else {
+          showToast("Podcast script and questions ready, but audio synthesis failed.", "warning");
+        }
+      } else {
+        throw new Error(data.error || "Failed to generate podcast");
+      }
+    } catch (err: any) {
+      console.error("AI Podcast Generation failed:", err);
+      showToast(err.message || "Could not generate AI podcast.", "error");
+    } finally {
+      setIsGeneratingPodcast(false);
+    }
+  };
+
   // Submit new Listening Practice (Teacher/Admin)
   const handlePublishPractice = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newTitle.trim() || !newYoutubeUrl.trim() || !newInstructions.trim() || !newQuestions.trim()) {
-      showToast("Please fill in all required fields.", "error");
+    const isYoutube = sourceType === "youtube";
+    const mediaUrl = isYoutube ? newYoutubeUrl.trim() : uploadedAudioUrl;
+
+    if (!newTitle.trim() || !mediaUrl || !newInstructions.trim() || !newQuestions.trim()) {
+      showToast("Please fill in all required fields and upload/provide a media track.", "error");
       return;
     }
 
@@ -204,7 +314,8 @@ export const ListeningPractice: React.FC<ListeningPracticeProps> = ({ user, onUs
     try {
       await createListeningPractice({
         title: newTitle.trim(),
-        youtubeUrl: newYoutubeUrl.trim(),
+        youtubeUrl: isYoutube ? mediaUrl : undefined,
+        audioUrl: !isYoutube ? mediaUrl : undefined,
         difficultyLevel: newDifficulty,
         instructions: newInstructions.trim(),
         questionText: newQuestions.trim(),
@@ -218,9 +329,13 @@ export const ListeningPractice: React.FC<ListeningPracticeProps> = ({ user, onUs
       // Reset form
       setNewTitle("");
       setNewYoutubeUrl("");
+      setPodcastFile(null);
+      setUploadedAudioUrl("");
       setNewInstructions("");
       setNewQuestions("");
       setAiTopicDescription("");
+      setAiPodcastTopic("");
+      setAiScript("");
       
       await loadData();
       setActiveTab("practice");
@@ -354,6 +469,7 @@ export const ListeningPractice: React.FC<ListeningPracticeProps> = ({ user, onUs
         practiceId: selectedPractice.id,
         practiceTitle: selectedPractice.title,
         youtubeUrl: selectedPractice.youtubeUrl,
+        podcastUrl: selectedPractice.audioUrl,
         userId: user.userId,
         userName: user.name,
         submissionType: selectedPractice.submissionType,
@@ -562,15 +678,34 @@ export const ListeningPractice: React.FC<ListeningPracticeProps> = ({ user, onUs
                 <span className="text-[9px] font-bold bg-slate-800 px-2.5 py-0.5 rounded text-slate-400 border border-slate-700">ANTI-CHEAT LOCK ON</span>
               </div>
               
-              <div className="relative aspect-video w-full">
-                <iframe
-                  id="proctored-youtube-iframe"
-                  src={getEmbedUrl(selectedPractice.youtubeUrl)}
-                  className="absolute inset-0 w-full h-full border-0"
-                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                  allowFullScreen
-                  title={selectedPractice.title}
-                />
+              <div className="relative w-full">
+                {selectedPractice.audioUrl ? (
+                  <div className="flex flex-col items-center justify-center bg-slate-950 p-8 sm:p-12 space-y-4 text-center">
+                    <div className="h-20 w-20 rounded-full bg-blue-500/10 border border-blue-500/20 flex items-center justify-center animate-pulse shadow-inner">
+                      <Mic className="h-10 w-10 text-blue-500" />
+                    </div>
+                    <div className="space-y-1.5">
+                      <span className="text-[10px] font-black tracking-widest text-blue-500 uppercase">EFC BROADCAST PODCAST</span>
+                      <p className="text-xs text-slate-400 font-medium">Focus on pronunciation, speed, and content details before responding.</p>
+                    </div>
+                    <audio
+                      src={selectedPractice.audioUrl}
+                      controls
+                      className="w-full max-w-md mt-6 rounded-xl shadow-lg border border-slate-800"
+                    />
+                  </div>
+                ) : (
+                  <div className="relative aspect-video w-full">
+                    <iframe
+                      id="proctored-youtube-iframe"
+                      src={getEmbedUrl(selectedPractice.youtubeUrl || "")}
+                      className="absolute inset-0 w-full h-full border-0"
+                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                      allowFullScreen
+                      title={selectedPractice.title}
+                    />
+                  </div>
+                )}
               </div>
 
               {/* Warning label banner overlaying player bottom */}
@@ -836,57 +971,210 @@ export const ListeningPractice: React.FC<ListeningPracticeProps> = ({ user, onUs
 
               <form onSubmit={handlePublishPractice} className="space-y-4 text-xs">
                 
-                {/* Youtube URL input */}
+                {/* Source Type Toggle */}
                 <div>
-                  <label className="block text-[10px] font-extrabold uppercase tracking-wider text-slate-500 mb-1.5">YouTube Podcast/Video Link</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="https://www.youtube.com/watch?v=..."
-                    value={newYoutubeUrl}
-                    onChange={(e) => setNewYoutubeUrl(e.target.value)}
-                    className="w-full text-xs rounded-xl border border-slate-200 px-4 py-2.5 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none font-mono"
-                  />
-                </div>
-
-                {/* AI integration accelerator block */}
-                <div className="bg-gradient-to-r from-blue-50 via-indigo-50/30 to-white rounded-xl border border-blue-100 p-4 space-y-3">
-                  <div className="flex items-center gap-2">
-                    <Sparkles className="h-5 w-5 text-indigo-600 animate-pulse" />
-                    <div>
-                      <h4 className="text-xs font-black text-slate-800">EFC AI curriculum designer</h4>
-                      <p className="text-[10px] text-slate-500 mt-0.5 font-medium">Auto-generate title, instructions, questions, and format recommendations in 5 seconds.</p>
-                    </div>
-                  </div>
-
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      placeholder="Optional topic/context (e.g. Akagera National Park documentary)"
-                      value={aiTopicDescription}
-                      onChange={(e) => setAiTopicDescription(e.target.value)}
-                      className="flex-1 text-xs rounded-lg border border-slate-200 bg-white px-3 py-2 outline-none"
-                    />
+                  <label className="block text-[10px] font-extrabold uppercase tracking-wider text-slate-500 mb-1.5">Lesson Media Sourcing</label>
+                  <div className="flex gap-4 p-1 bg-slate-50 rounded-xl border border-slate-100 max-w-md mb-3">
                     <button
                       type="button"
-                      onClick={handleAiGenerateQuestions}
-                      disabled={isGeneratingAi || !newYoutubeUrl.trim()}
-                      className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-[10px] transition disabled:opacity-50 cursor-pointer shrink-0 flex items-center gap-1.5 shadow-sm shadow-indigo-100"
+                      onClick={() => setSourceType("youtube")}
+                      className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${sourceType === "youtube" ? "bg-white text-blue-600 shadow-sm border border-slate-100" : "text-slate-500"}`}
                     >
-                      {isGeneratingAi ? (
-                        <>
-                          <RefreshCw className="h-3 w-3 animate-spin" />
-                          <span>Preparing lesson...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Sparkles className="h-3.5 w-3.5" />
-                          <span>AI Prepare Lesson</span>
-                        </>
-                      )}
+                      📺 YouTube Video
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSourceType("podcast")}
+                      className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${sourceType === "podcast" ? "bg-white text-blue-600 shadow-sm border border-slate-100" : "text-slate-500"}`}
+                    >
+                      🎙️ Upload Podcast
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSourceType("ai_podcast")}
+                      className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${sourceType === "ai_podcast" ? "bg-white text-indigo-600 shadow-sm border border-indigo-100" : "text-slate-500"}`}
+                    >
+                      ✨ AI Podcast
                     </button>
                   </div>
                 </div>
+
+                {sourceType === "youtube" && (
+                  /* Youtube URL input */
+                  <div>
+                    <label className="block text-[10px] font-extrabold uppercase tracking-wider text-slate-500 mb-1.5">YouTube Podcast/Video Link</label>
+                    <input
+                      type="text"
+                      required={sourceType === "youtube"}
+                      placeholder="https://www.youtube.com/watch?v=..."
+                      value={newYoutubeUrl}
+                      onChange={(e) => setNewYoutubeUrl(e.target.value)}
+                      className="w-full text-xs rounded-xl border border-slate-200 px-4 py-2.5 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none font-mono"
+                    />
+                  </div>
+                )}
+
+                {sourceType === "podcast" && (
+                  /* Podcast upload input */
+                  <div className="space-y-2">
+                    <label className="block text-[10px] font-extrabold uppercase tracking-wider text-slate-500 mb-1.5">Upload Raw Audio Podcast File (.mp3, .wav, .m4a)</label>
+                    <div className="flex items-center gap-4">
+                      <label className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-dashed border-blue-200 bg-blue-50/20 text-blue-600 font-extrabold cursor-pointer hover:bg-blue-50 transition text-xs">
+                        <Upload className="h-4 w-4" />
+                        <span>{podcastFile ? "Choose different podcast" : "Select Podcast Audio"}</span>
+                        <input
+                          type="file"
+                          accept="audio/*"
+                          onChange={handlePodcastFileChange}
+                          className="hidden"
+                        />
+                      </label>
+                      {isUploadingPodcast && (
+                        <div className="flex items-center gap-2 text-blue-600 font-bold animate-pulse text-[10px]">
+                          <RefreshCw className="h-3 w-3 animate-spin" />
+                          <span>Uploading track...</span>
+                        </div>
+                      )}
+                      {uploadedAudioUrl && !isUploadingPodcast && (
+                        <div className="text-emerald-600 font-bold text-[10px] flex items-center gap-1">
+                          <CheckCircle className="h-3.5 w-3.5" />
+                          <span>Podcast uploaded!</span>
+                        </div>
+                      )}
+                    </div>
+                    {uploadedAudioUrl && (
+                      <div className="bg-slate-50 border border-slate-100 p-2 rounded-lg flex items-center gap-2 max-w-md">
+                        <span className="text-[10px] font-bold text-slate-500 truncate shrink">File: {podcastFile?.name || "Uploaded Podcast Track"}</span>
+                        <audio src={uploadedAudioUrl} controls className="h-6 w-full scale-90" />
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {sourceType === "ai_podcast" && (
+                  /* Gemini AI Podcast Generator interface block */
+                  <div className="space-y-4 bg-gradient-to-r from-blue-50/50 via-indigo-50/20 to-white rounded-2xl border border-blue-100 p-5 shadow-sm">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="h-5 w-5 text-indigo-600 animate-pulse" />
+                      <div>
+                        <h4 className="text-xs font-black text-slate-800 uppercase tracking-wide">Gemini Podcast Synthesizer</h4>
+                        <p className="text-[10px] text-slate-500 mt-0.5">Gemini will write an original script on your topic, record the voice-over, and formulate comprehension questions.</p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-[10px] font-extrabold uppercase tracking-wider text-slate-500 mb-1">Podcast Topic / Theme</label>
+                        <input
+                          type="text"
+                          placeholder="E.g., Honey production in Gicumbi, CEFR B2 passive voice practice, Volcanoes National Park"
+                          value={aiPodcastTopic}
+                          onChange={(e) => setAiPodcastTopic(e.target.value)}
+                          className="w-full text-xs rounded-xl border border-slate-200 bg-white px-3 py-2.5 outline-none focus:border-blue-500"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[10px] font-extrabold uppercase tracking-wider text-slate-500 mb-1">Select AI Speaker Voice</label>
+                          <select
+                            value={aiVoice}
+                            onChange={(e) => setAiVoice(e.target.value as any)}
+                            className="w-full text-xs rounded-xl border border-slate-200 bg-white px-3 py-2 outline-none focus:border-blue-500"
+                          >
+                            <option value="Zephyr">Zephyr (Warm & Professional)</option>
+                            <option value="Puck">Puck (British-like storyteller)</option>
+                            <option value="Charon">Charon (Calm & Clear speaker)</option>
+                            <option value="Fenrir">Fenrir (Deep & Resonant narrator)</option>
+                            <option value="Kore">Kore (Cheerful & Friendly voice)</option>
+                          </select>
+                        </div>
+
+                        <div className="flex items-end">
+                          <button
+                            type="button"
+                            onClick={handleAiGeneratePodcast}
+                            disabled={isGeneratingPodcast || !aiPodcastTopic.trim()}
+                            className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-[10px] transition disabled:opacity-50 cursor-pointer flex items-center justify-center gap-1.5 shadow-sm shadow-indigo-100 uppercase tracking-wider"
+                          >
+                            {isGeneratingPodcast ? (
+                              <>
+                                <RefreshCw className="h-3 w-3 animate-spin" />
+                                <span>Recording Voice-Over...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Mic className="h-3.5 w-3.5" />
+                                <span>Generate AI Podcast</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {aiScript && (
+                      <div className="mt-4 p-4 rounded-xl bg-slate-900 text-slate-200 border border-slate-800 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[9px] font-black tracking-widest text-indigo-400 uppercase flex items-center gap-1">
+                            <Volume2 className="h-3 w-3 text-indigo-400 animate-pulse" /> Live AI Podcast Preview
+                          </span>
+                          <span className="text-[9px] font-bold text-slate-500">Voice: {aiVoice}</span>
+                        </div>
+                        {uploadedAudioUrl && (
+                          <audio src={uploadedAudioUrl} controls className="w-full h-8 scale-95 origin-left" />
+                        )}
+                        <div className="space-y-1">
+                          <span className="text-[9px] font-bold text-slate-400 block uppercase">Written Podcast Script:</span>
+                          <p className="text-[11px] text-slate-300 font-medium whitespace-pre-wrap leading-relaxed max-h-24 overflow-y-auto pr-1">
+                            "{aiScript}"
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {sourceType !== "ai_podcast" && (
+                  /* AI integration accelerator block for non-AI sources */
+                  <div className="bg-gradient-to-r from-blue-50 via-indigo-50/30 to-white rounded-xl border border-blue-100 p-4 space-y-3">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="h-5 w-5 text-indigo-600 animate-pulse" />
+                      <div>
+                        <h4 className="text-xs font-black text-slate-800">EFC AI curriculum designer</h4>
+                        <p className="text-[10px] text-slate-500 mt-0.5 font-medium">Auto-generate title, instructions, questions, and format recommendations in 5 seconds.</p>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="Optional topic/context (e.g. Akagera National Park documentary)"
+                        value={aiTopicDescription}
+                        onChange={(e) => setAiTopicDescription(e.target.value)}
+                        className="flex-1 text-xs rounded-lg border border-slate-200 bg-white px-3 py-2 outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleAiGenerateQuestions}
+                        disabled={isGeneratingAi || (sourceType === "youtube" ? !newYoutubeUrl.trim() : !uploadedAudioUrl)}
+                        className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-[10px] transition disabled:opacity-50 cursor-pointer shrink-0 flex items-center gap-1.5 shadow-sm shadow-indigo-100"
+                      >
+                        {isGeneratingAi ? (
+                          <>
+                            <RefreshCw className="h-3 w-3 animate-spin" />
+                            <span>Preparing lesson...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="h-3.5 w-3.5" />
+                            <span>AI Prepare Lesson</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {/* Lesson Title */}
@@ -1055,20 +1343,36 @@ export const ListeningPractice: React.FC<ListeningPracticeProps> = ({ user, onUs
                   <h3 className="text-lg font-black text-slate-800">{activeGradingSub.practiceTitle}</h3>
                 </div>
 
-                {/* YouTube Link referenced */}
+                {/* YouTube Link or Podcast audio referenced */}
                 <div className="bg-slate-50 rounded-xl p-3 border border-slate-100 flex items-center justify-between text-xs">
-                  <div className="flex items-center gap-2">
-                    <Youtube className="h-4.5 w-4.5 text-rose-600 shrink-0" />
-                    <span className="font-bold text-slate-700">Video reference link:</span>
-                  </div>
-                  <a
-                    href={activeGradingSub.youtubeUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-blue-600 hover:underline font-mono truncate text-[11px] max-w-sm font-semibold"
-                  >
-                    {activeGradingSub.youtubeUrl}
-                  </a>
+                  {activeGradingSub.podcastUrl ? (
+                    <>
+                      <div className="flex items-center gap-2">
+                        <Mic className="h-4.5 w-4.5 text-blue-600 shrink-0" />
+                        <span className="font-bold text-slate-700">Podcast Reference:</span>
+                      </div>
+                      <audio
+                        src={activeGradingSub.podcastUrl}
+                        controls
+                        className="max-w-xs h-8 scale-90"
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex items-center gap-2">
+                        <Youtube className="h-4.5 w-4.5 text-rose-600 shrink-0" />
+                        <span className="font-bold text-slate-700">Video reference link:</span>
+                      </div>
+                      <a
+                        href={activeGradingSub.youtubeUrl || ""}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-blue-600 hover:underline font-mono truncate text-[11px] max-w-sm font-semibold"
+                      >
+                        {activeGradingSub.youtubeUrl || "No Video URL"}
+                      </a>
+                    </>
+                  )}
                 </div>
 
                 {/* Submission content details */}
@@ -1175,8 +1479,8 @@ export const ListeningPractice: React.FC<ListeningPracticeProps> = ({ user, onUs
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-              <Youtube className="h-4.5 w-4.5 text-red-600" />
-              <span>Available Listening lessons ({practices.length})</span>
+              <BookOpen className="h-4.5 w-4.5 text-blue-600" />
+              <span>Available Listening & Podcast Lessons ({practices.length})</span>
             </h2>
           </div>
 
@@ -1184,7 +1488,7 @@ export const ListeningPractice: React.FC<ListeningPracticeProps> = ({ user, onUs
             <div className="rounded-2xl border border-dashed border-slate-100 p-12 text-center text-slate-400 bg-white shadow-sm">
               <BookOpen className="h-8 w-8 mx-auto text-slate-300 mb-2" />
               <p className="text-xs font-bold text-slate-700">No listening practices are active yet!</p>
-              <p className="text-[11px] text-slate-400 mt-1">Check back shortly once teachers publish your first secure video lesson.</p>
+              <p className="text-[11px] text-slate-400 mt-1">Check back shortly once teachers publish your first secure video or podcast lesson.</p>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -1205,8 +1509,8 @@ export const ListeningPractice: React.FC<ListeningPracticeProps> = ({ user, onUs
                         {practice.difficultyLevel}
                       </span>
 
-                      <span className="text-[9px] font-bold text-slate-400 font-mono">
-                        {new Date(practice.createdAt).toLocaleDateString()}
+                      <span className="text-[9px] font-bold text-slate-400 font-mono flex items-center gap-1">
+                        {practice.audioUrl ? "🎙️ Podcast" : "📺 YouTube Video"}
                       </span>
                     </div>
 
